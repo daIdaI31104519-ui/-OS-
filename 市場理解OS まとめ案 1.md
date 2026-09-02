@@ -19,10 +19,12 @@
 観測
 → 測定
 → 市場理解
-→ 因果仮説
+→ 因果仮説候補
 → 市場状態の記憶
 → 研究
-→ 優位性
+→ Demo Forwardによる前向き検証
+→ 優位性・適用可能な仮説群
+→ Trade Thesis
 → 売買候補
 → 防御
 → 実行
@@ -40,6 +42,8 @@
 5. 長期的に生存できるか
 6. 成功・失敗の理由を後から追跡できるか
 7. 研究成果が次の市場理解へ再利用されるか
+8. Historical / Demo / Liveの異なる証拠を混同していないか
+9. 複数仮説を使う場合、同じEvidenceを二重評価していないか
 
 ---
 
@@ -51,16 +55,16 @@
 市場理解OSを外部世界と接続し、何を・どこで・どう動かすかを管理する。
 
 ## B. MARKET UNDERSTANDING CORE
-市場を観測・測定・理解し、因果仮説と市場状態を作る。
+市場を観測・測定・理解し、因果仮説候補と市場状態を作る。
 
 ## C. RESEARCH DOMAIN
-仮説・特徴量・計算式・Market DNA・失敗境界を研究し、Causal Edge / Empirical Edgeを作る。
+仮説・特徴量・計算式・Market DNA・失敗境界を研究し、Historical / OOS / Demo Forward / Stress等を用いてCausal Edge / Empirical Edgeと適用可能なHypothesis Setを作る。
 
 ## D. PRODUCTION / TRADING DOMAIN
-研究済み知識と現在市場からSignalを作り、Defense・Execution・Position Supervisorを通して実売買する。
+研究済み知識と現在市場からApplicable Hypothesis Setを作り、複数仮説を一つのTrade Thesisとして固定したうえで、Signal・Defense・Execution・Position Supervisorを通して実売買する。
 
 ## E. POST-TRADE / FEEDBACK DOMAIN
-取引結果を分析し、原因別にResearchへ戻す。
+取引結果をTrade単位だけでなく、Trade Thesis内の各Hypothesis・Signal・Defense・Execution・Supervisor単位で分析し、原因別にResearchへ戻す。
 
 さらに全領域を横断して、
 
@@ -115,15 +119,29 @@ Evidence
         ↓
 Causal Engine
         ↓
-Causal Hypothesis
+Hypothesis Pool
         ↓
 Market DNA
         ↓
 Knowledge / Case / Memory
         ↓
 Research Domain
+        │
+        ├─ Random / Discovery
+        ├─ Historical / Replay / OOS / Regime
+        ├─ Demo Forward Trial
+        ├─ Shadow / Counterfactual
+        └─ Stress / Validation
         ↓
-Causal Edge / Empirical Edge / Constraint / Knowledge
+Evidence Package
+        ↓
+Causal Edge / Empirical Edge / Constraint / Approved Hypothesis
+        ↓
+Current Market DNAと照合
+        ↓
+Applicable Hypothesis Set
+        ↓
+Trade Thesis
         ↓
 AI Review（補助・任意）
         ↓
@@ -137,17 +155,17 @@ Order Intent
         ↓
 Exchange Adapter
         ↓
-Entry / Entry Thesis
+Entry / Entry Thesis固定
         ↓
 Position Supervisor
         ↓
 Exit / In-Trade Defense
         ↓
-Trade Result
+Trade Result / Production Evidence
         ↓
 Logger / Post-Trade Analysis
         ↓
-Counterfactual / Research Router
+Hypothesis Attribution / Counterfactual / Research Router
         ↓
 必要なResearchへ戻る
         ↺
@@ -167,33 +185,72 @@ Counterfactual / Research Router
 Research
 → Candidate
 → Validation
+→ Demo Forward
 → Approval
 → Production
 ```
 
-を基本とする。
+を基本候補とする。
 
-## 4.3 Raw Dataを捨てない
+Demo Forwardは「過去で良かった仮説」をそのままLiveへ送らず、仮説固定後の新しい市場データで前向きに試す中間証拠として扱う。
+
+## 4.3 Random / Historical / Demo / Liveを混ぜない
+証拠源ごとに意味が異なる。
+
+```text
+Random / Discovery
+= 仮説の種・比較基準
+
+Historical / OOS
+= 過去再現性
+
+Demo Forward
+= 仮説固定後の未来データでの前向き検証
+
+Live
+= 実約定・手数料・Slippage・API・流動性を含むProduction Evidence
+```
+
+件数や勝率を単純合算して一つの成績にしない。
+
+## 4.4 複数仮説は多数決しない
+Productionでは単一仮説だけに依存せず複数仮説を利用可能にするが、
+
+```text
+3 BUY vs 2 SELL → BUY
+```
+
+のような票決は禁止候補。
+
+仮説ごとの研究強度、独立性、共有Evidence、適用条件、反証、Expected Valueを評価し、一つのTrade Thesisへまとめる。
+
+## 4.5 Entry前にTrade Thesisを固定する
+使用する仮説、役割、方向、Expected Effect、Expected Horizon、Invalidation、ContradictionをEntry前に固定する。
+
+Entry後に都合の良い仮説を追加して理由を後付けしない。
+
+## 4.6 Raw Dataを捨てない
 Featureを先に作ってRawを失うことは禁止する。計算式やFeature定義を後から変更しても、Rawから再生成可能にする。
 
-## 4.4 各責務を小さく保つ
+## 4.7 各責務を小さく保つ
 各モジュールは本来の仕事を一つに絞る。ただし処理結果から得られる品質情報・異常・Research Candidate等の副産物は捨てない。
 
-## 4.5 「分からない」を推測で埋めない
+## 4.8 「分からない」を推測で埋めない
 Market IntelligenceやCausal Engineが説明できない現象はUNEXPLAINED EVENT / Research Candidateとして保存する。
 
-## 4.6 失敗だけでなく成功・見送りも研究する
+## 4.9 失敗だけでなく成功・見送りも研究する
 - Unexpected Failure
 - Unexpected Success
 - Missed Opportunity
 - Defense Block
 - Supervisor Warning
 - Shadow Trade
+- Demo Forward Trial
 
 も研究対象にする。
 
-## 4.7 全てを一つのスコアへ潰さない
-Expected Value、Data Quality、Causal Support、Applicability、Constraint、AI Review等は意味が違う。単純加算した総合点だけで判断しない。
+## 4.10 全てを一つのスコアへ潰さない
+Expected Value、Data Quality、Causal Support、Applicability、Constraint、Hypothesis Dependence、AI Review等は意味が違う。単純加算した総合点だけで判断しない。
 
 ---
 
@@ -205,6 +262,7 @@ Expected Value、Data Quality、Causal Support、Applicability、Constraint、AI
 - AI Team
 - AI Meeting
 - 「負けたらTrainer」の単純再学習構造
+- 単一仮説だけを本番判断の唯一の根拠に固定する構造
 
 ## Research Toolへ変更
 - Quantum Layer → Quantum / Search Tool
@@ -214,8 +272,9 @@ Expected Value、Data Quality、Causal Support、Applicability、Constraint、AI
 
 ## Experimental Frameworkへ統合
 - Random Baseline
-- Replay
+- Historical / Replay
 - Paper Trade
+- Demo Forward Trial
 - Shadow Trade
 - Counterfactual
 
@@ -237,6 +296,7 @@ Expected Value、Data Quality、Causal Support、Applicability、Constraint、AI
 - 本番取引で毎回Quantumを通す設計
 - Human Market Diaryを直接学習データにする設計
 - 各層が自分自身のコードやルールを自動書換えする機構
+- AIが未検証Hypothesisをその場でProduction Trade Thesisへ追加する機構
 
 これらは必要性が実証された時にProposalとして追加する。
 
@@ -251,8 +311,11 @@ Expected Value、Data Quality、Causal Support、Applicability、Constraint、AI
 3. Data Contract
 4. Processing Contract
 5. Trace / Event ID体系
-6. Research → Approval → Productionの昇格規則
-7. Market Profileによる銘柄差し替え規則
-8. Python RuntimeとTelegramの責任範囲
+6. Research → Demo Forward → Approval → Productionの昇格規則
+7. Historical / Demo / Live Evidenceの分離規則
+8. Hypothesis Pool → Applicable Hypothesis Set → Trade Thesisの契約
+9. 仮説間Dependence / Shared Evidenceの扱い
+10. Market Profileによる銘柄差し替え規則
+11. Python RuntimeとTelegramの責任範囲
 
-この8点が固まった時点で、暫定まとめから正式設計へ移行する。
+この11点が固まった時点で、暫定まとめから正式設計へ移行する。
