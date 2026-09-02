@@ -19,9 +19,11 @@ Researchは、
 - Feature / Formulaの有効性を調べる
 - Market DNAの軸・類似性を改善する
 - Edgeが本当にRandomより優れているかを確かめる
+- 仮説固定後の未来データでもEdgeが残るかをDemo Forwardで確かめる
 - どのRegimeで成立・崩壊するかを見る
 - FailureBoundaryを発見する
 - Negative Knowledgeを蓄積する
+- 複数Hypothesisの組み合わせが本当に単独仮説より強いかを研究する
 
 ために存在する。
 
@@ -36,6 +38,7 @@ Research対象はTrade失敗だけではない。
 - Causal Hypothesis
 - Alternative Hypothesis
 - Contradiction
+- Hypothesis Set Candidate
 - Feature Candidate
 - Formula Candidate
 - Market DNA Candidate
@@ -48,6 +51,8 @@ Research対象はTrade失敗だけではない。
 - Position Supervisor Warning
 - Execution anomaly
 - Data Quality anomaly
+- Demo Forward failure / success
+- Live vs Demo divergence
 - Research Candidate
 
 ---
@@ -65,6 +70,7 @@ Research Domain
 ├─ Formula Research
 ├─ Causal Research
 ├─ Market DNA Research
+├─ Hypothesis Set Research
 ├─ Experimental Framework
 ├─ Validation Framework
 └─ Search / Optimization Tools
@@ -85,18 +91,6 @@ Research Domain
 - News Event後のLag
 
 単一条件だけで結論を出さず、条件付き関係を調べる。
-
-例:
-
-```text
-金曜日
-↓
-平均Return -0.2%
-
-金曜日 + ETF強流入
-↓
-平均Return +0.3%
-```
 
 ---
 
@@ -163,6 +157,7 @@ Liquidity Score C = nonlinear(Spread, Depth, Slippage)
 - Sensitivity
 - Stability
 - Stress
+- Demo Forward
 
 正式Formulaへ昇格する場合はFormula RegistryのVersionを更新する。
 
@@ -182,6 +177,7 @@ Causal Engineが定義した検証要求を実行する。
 - Historical Case検証
 - OOS
 - Regime Stability
+- Demo Forward
 - Stress条件
 
 Causal Researchは「原因を証明した」と安易に確定しない。
@@ -202,45 +198,278 @@ SUPPORTED / WEAK / RETIRED等のLifecycle判断材料を返す。
 - Case Retrieval精度
 - DNAとFeature Priorityの関係
 - DNAとEdge安定性の関係
+- DNAとHypothesis Setの関係
 
 目的:
 
 > Market DNAが「似ている」と判断した市場が、本当にResearchやTrade上も似ていたかを検証する。
 
+さらに、
+
+```text
+DNA-A
+→ H-101 + H-204 が強い
+
+DNA-B
+→ H-101単独が強い
+
+DNA-C
+→ H-407が強くSHORT Thesisは不適用
+```
+
+のように、どの市場状態でどのHypothesis Setが適用可能かも研究対象にする。
+
 ---
 
-# 10. Experimental Framework
+# 10. Hypothesis Set Research
 
-Random / Replay / Paper / Shadow / Counterfactualを別々の巨大Layerにしない。
+Productionで複数仮説を使う場合、単純多数決は禁止候補とする。
+
+研究対象:
+
+- 各Hypothesisの単独性能
+- Hypothesis間の独立性
+- Shared Evidence
+- 共通Causeの二重計上
+- Supporting / Conditional / Contradicting関係
+- 組み合わせ時のExpected Value
+- Market DNA別の組み合わせ性能
+- OOS / Demo Forwardでの再現性
+
+例:
+
+```text
+H-101単独
+EV +0.10
+
+H-101 + H-204
+EV +0.18
+
+H-101 + H-331
+EV +0.13
+
+H-101 + H-204 + H-331
+EV +0.27
+```
+
+ただし、組み合わせ探索を無制限にすると過学習と組み合わせ爆発が起きる。
+
+そのため、
+
+- 仮説数上限
+- Shared Evidence確認
+- 事前登録した組み合わせ
+- HistoricalだけでなくOOS / Demo Forward確認
+
+を正式設計候補とする。
+
+---
+
+# 11. Experimental Framework
+
+Random / Historical / Replay / Paper / Demo Forward / Shadow / Counterfactualを別々の巨大Layerにしない。
 
 一つの実験基盤でmodeとして扱う。
 
 ```text
 mode = RANDOM_BASELINE
-mode = PAPER
+mode = HISTORICAL
 mode = REPLAY
+mode = PAPER
+mode = DEMO_FORWARD
 mode = SHADOW
 mode = COUNTERFACTUAL
 ```
 
 ## Random Baseline
-戦略がRandomより本当に優れているかを比較する。
+戦略がRandomより本当に優れているかを比較する。仮説の種や比較基準を得る。
 
-## Paper Trade
-実資金を使わず現在市場で仮想取引。
+## Historical
+過去Caseで仮説・Edge・Hypothesis Setの再現性を調べる。
 
 ## Replay
-過去市場を時間順に再生して当時知り得た情報だけで検証。
+過去市場を時間順に再生し、当時知り得た情報だけで検証する。
+
+## Paper Trade
+実資金を使わず仮想取引する一般的な実験mode。
+
+## Demo Forward
+仮説やHypothesis Setを固定した後、T0以降に新しく到来する市場データだけで仮想取引する前向き検証。
 
 ## Shadow Trade
-Defense等でBlockした取引を仮想追跡。
+Defense等でBlockした取引、またはProduction未採用候補を仮想追跡。
 
 ## Counterfactual
 実際とは別判断をした場合の結果を比較。
 
 ---
 
-# 11. Random Baselineの役割
+# 12. Demo Forward Trialの正式な役割
+
+Demo ForwardはHistoricalとLiveの中間証拠。
+
+```text
+仮説作成 T0
+──────────────
+← Historical / Replay
+→ Demo Forward
+```
+
+目的:
+
+- 過去データから発見したEdgeの過学習を早期発見する
+- Real Tradeが少なくても研究サンプルを増やす
+- 複数候補をProduction前に絞る
+- Position SupervisorやExit規則も実資金なしで前向き検証する
+
+候補フロー:
+
+```text
+Hypothesis Pool
+↓
+Historical / OOS
+↓
+Demo Forward Trial
+↓
+Evidence Package
+↓
+Production Candidate
+```
+
+DemoはReal Tradeの代替ではない。
+
+Real Tradeは実約定・手数料・Slippage・Partial Fill・API・流動性等を含む別種のEvidenceとする。
+
+---
+
+# 13. DemoとLiveのロジックを分岐させすぎない
+
+比較可能性を保つため、Signal以降の判断ロジックは可能な限り共通化する。
+
+```text
+Signal
+↓
+Defense
+↓
+Execution Logic
+↓
+Entry Thesis
+↓
+Position Supervisor
+↓
+Exit
+        │
+        ├→ Demo Execution Adapter
+        └→ Real Exchange Adapter
+```
+
+原則:
+
+> 頭脳は同じ。実行先だけ違う。
+
+Demo専用の都合の良いEntry / Exitロジックを作らない。
+
+Demo側でも可能な限り、
+
+- Fee
+- Spread
+- Slippage
+- Orderbook depth
+- Latency
+- Funding
+- Partial Fill model
+
+を反映する。
+
+---
+
+# 14. Evidence Sourceを絶対に混ぜない
+
+例えば、
+
+```text
+Random 3000件
+Historical 4200件
+Demo Forward 420件
+Live 28件
+```
+
+を「合計7648件、勝率XX%」としてまとめない。
+
+Hypothesis / Hypothesis Setごとに証拠源を分離する。
+
+```text
+Historical:
+  n = 4200
+  EV = +0.18
+
+OOS:
+  n = 900
+  EV = +0.15
+
+Random Baseline:
+  n = 3000
+  EV = -0.01
+
+Demo Forward:
+  n = 420
+  EV = +0.16
+
+Live:
+  n = 28
+  EV = +0.11
+```
+
+それぞれの意味・信頼性・市場摩擦が違うため、別Evidence Channelとして扱う。
+
+---
+
+# 15. Market Event単位の重複に注意
+
+同じBTC急落で、
+
+```text
+H-101成功
+H-102成功
+H-103成功
+```
+
+しても、独立した3つの市場現象とは限らない。
+
+必ずMarket Event IDへ紐付ける。
+
+```text
+EVENT-9001
+├─ H-101 Trial
+├─ H-102 Trial
+└─ H-103 Trial
+```
+
+Evidence数を水増ししない。
+
+---
+
+# 16. Shadow Production
+
+ProductionでH-101だけ採用している場合でも、未採用の有望候補をDemoで並行追跡できる。
+
+```text
+Real:
+H-101 → Live
+
+Shadow Demo:
+H-102
+H-103
+H-104
+```
+
+一つの現在市場から複数候補を前向き研究できる。
+
+ただしLiveの意思決定へ未承認候補を直接混ぜない。
+
+---
+
+# 17. Random Baselineの役割
 
 Random Tradeは利益を狙わない。
 
@@ -248,53 +477,29 @@ Random Tradeは利益を狙わない。
 
 > 研究戦略が「たまたま市場が上がった」だけではないかを確認する比較対象。
 
-例:
+Random / DiscoveryとDemo Forwardは役割が異なる。
 
 ```text
-Strategy PF = 1.32
-Random PF = 1.01
+Random
+= 発見・比較
+
+Demo Forward
+= 固定した仮説の未来検証
 ```
-
-と、
-
-```text
-Strategy PF = 1.04
-Random PF = 1.02
-```
-
-では研究価値が違う。
 
 ---
 
-# 12. Shadow / Counterfactualの重要性
+# 18. Shadow / Counterfactualの重要性
 
 実際に行った判断だけ研究するとSelection Biasが発生する。
 
-例:
+DefenseでBlockしたTrade、Supervisor警告に従わなかったCase等も追跡する。
 
-```text
-Signal = BUY
-Defense = BLOCK
-Real Trade = NONE
-```
-
-Shadowでその後を追跡し、Defense Blockの正しさを研究する。
-
-Position Supervisorについても、
-
-```text
-THESIS_WEAKENINGを出した
-↓
-Exitしなかった
-↓
-その後 +1.8R
-```
-
-なら、警告が過敏だった可能性を研究できる。
+Counterfactualは未来を知っていたものとして本番評価に使わず、後知恵を利用したResearch補助とする。
 
 ---
 
-# 13. Validation Framework
+# 19. Validation Framework
 
 Research結果をProductionへ持っていく前に最低限次を検討する。
 
@@ -307,36 +512,19 @@ Research結果をProductionへ持っていく前に最低限次を検討する�
 ## Regime Validation
 Bull / Bear / Range / High Vol / Low Liquidity等で安定するか。
 
+## Demo Forward
+仮説固定後の未来データでも成立するか。
+
 ## Stress Lab
 成立しそうな仮説・Edgeを意図的に壊し、限界を調べる。
 
+全仮説に完全に同じ検証順を強制するかは本設計で決める。
+
 ---
 
-# 14. Stress Labの新しい位置づけ
+# 20. Stress Labの位置づけ
 
 Stress LabはResearch全体そのものではない。
-
-位置:
-
-```text
-Hypothesis / Edge
-→ Historical
-→ OOS
-→ Regime
-→ Stress Lab
-```
-
-Stress対象候補:
-
-- Flash Crash
-- Liquidity collapse
-- Spread expansion
-- Extreme volatility
-- News shock
-- API latency
-- Data degradation
-- Correlation breakdown
-- Leverage unwind
 
 成果物:
 
@@ -346,9 +534,11 @@ StressResult
 → Constraint
 ```
 
+Stress結果はHypothesis / Edge / Hypothesis SetのApplicabilityへ戻す。
+
 ---
 
-# 15. Quantum / Search
+# 21. Quantum / Search
 
 Quantumは必須通過Layerにしない。
 
@@ -359,16 +549,18 @@ Researchが必要に応じて使う探索Tool。
 - Feature selection
 - Combination search
 - Parameter search
+- Hypothesis Set候補探索
 - Scenario search
 - Clustering補助
 - Similarity optimization
 
-探索で見つかった結果をそのままProductionへ入れない。
+探索で見つかった組み合わせをそのままProductionへ入れない。
 
 ```text
-Quantum / Search
+Search
 → Candidate
-→ Standard Validation
+→ Historical / OOS
+→ Demo Forward
 → Approval
 ```
 
@@ -376,9 +568,9 @@ Quantum / Search
 
 ---
 
-# 16. Research Priority
+# 22. Research Priority
 
-Research Candidateは大量発生するため、Queueを持つ。
+Research Candidateは大量発生するためQueueを持つ。
 
 Priority要素候補:
 
@@ -390,15 +582,18 @@ Priority要素候補:
 - Potential Loss / Tail Risk
 - Reproducibility
 - Data availability
+- Demo Forward cost
 
-ただしPriority Formulaは最初から固定しない。Calculation / Formula Researchで改善する。
+Priority Formulaは最初から固定しない。
 
 ---
 
-# 17. Researchの成果物
+# 23. Researchの成果物
 
 ResearchはTrade Signalそのものではなく、次を返す。
 
+- Approved / Candidate Hypothesis
+- Hypothesis Set Candidate
 - Causal Edge
 - Empirical Edge
 - Feature Knowledge
@@ -407,36 +602,41 @@ ResearchはTrade Signalそのものではなく、次を返す。
 - FailureBoundary
 - Constraint
 - Negative Knowledge
-- Research Result
+- Evidence Package
 - Applicability
 - Uncertainty
 - Candidate for Approval
 
 ---
 
-# 18. Causal Edge / Empirical Edge
+# 24. Causal Edge / Empirical Edge
 
 ## Causal Edge
 なぜ効く可能性があるかについて、因果仮説とEvidenceが一定水準ある。
 
 ## Empirical Edge
-原因説明は完全でなくても、Historical / OOS / Regime等で統計的再現性がある。
+原因説明は完全でなくても、Historical / OOS / Demo Forward / Regime等で統計的再現性がある。
 
 因果説明が完全でないという理由だけで、再現性のあるEmpirical Edgeを捨てない。
 
-最終的なProductionでは「因果の美しさ」ではなく、期待値・適用条件・Risk・再現性を重視する。
-
 ---
 
-# 19. ResearchからProductionへの昇格
+# 25. ResearchからProductionへの昇格
+
+候補フロー:
 
 ```text
-Research
-→ Candidate
-→ Validation
+Discovery / Candidate
+→ Historical / Replay
+→ OOS / Regime
+→ Demo Forward
+→ Stress / Constraint（必要時）
+→ Evidence Package
 → Approval
-→ Approved Knowledge / Edge
+→ Approved Knowledge / Hypothesis / Edge
 → Production
 ```
 
 Research自身が本番設定を直接変更することは禁止する。
+
+Live EvidenceはProduction後にResearchへ戻し、DemoとLiveの差も研究対象にする。
