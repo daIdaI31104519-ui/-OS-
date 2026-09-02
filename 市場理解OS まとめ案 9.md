@@ -6,7 +6,7 @@
 
 このファイルは「完成した設計」ではない。
 
-まとめ案1〜8を本格的な設計MDへ昇格する前に、
+まとめ案1〜8および追加整理案を本格的な設計MDへ昇格する前に、
 
 - 固定してよい原則
 - まだ深掘りが必要な部分
@@ -67,7 +67,7 @@ SignalとDefenseを分離する。
 ## FIX-CANDIDATE-010
 Entry後にPosition Supervisorを置く。
 
-Supervisorは「価格」ではなくEntry Thesisの健全性を監督する。
+Supervisorは「価格」ではなくEntry Thesis / Trade Thesisの健全性を監督する。
 
 ## FIX-CANDIDATE-011
 Trade後は原因別にResearchへ戻す。
@@ -80,6 +80,27 @@ Trade後は原因別にResearchへ戻す。
 ## FIX-CANDIDATE-013
 Python Runtime / Telegram / Monitoring等を市場理解ロジックから分離する。
 
+## FIX-CANDIDATE-014
+Demo Forward TrialをExperimental Frameworkへ正式に含める。
+
+Demo Forwardは、HistoricalとLiveの間で、仮説固定後の未来データを使う前向き検証として扱う。
+
+## FIX-CANDIDATE-015
+Random / Historical / Demo / Live Evidenceを混ぜない。
+
+件数・勝率・EV等を単純合算しない。
+
+## FIX-CANDIDATE-016
+Productionでは単一Hypothesisだけを唯一の根拠に固定せず、Approved HypothesisからApplicable Hypothesis Setを構成できるようにする。
+
+## FIX-CANDIDATE-017
+複数Hypothesisは多数決しない。
+
+Shared Evidence / Dependence / Redundancy / Contradictionを確認し、Trade Thesisへ整理する。
+
+## FIX-CANDIDATE-018
+Entry前にTrade Thesisを固定し、Entry後の理由後付けを禁止候補とする。
+
 ---
 
 # 2. Legacy / 廃止候補
@@ -90,7 +111,7 @@ Python Runtime / Telegram / Monitoring等を市場理解ロジックから分離
 ## LEGACY-002 AI Meeting
 AI多数決・会議を本番判断の中心に置かない。
 
-AIは将来AI Reviewとして独立査読へ変更する。
+AIはAI Reviewとして独立査読へ変更する。
 
 ## LEGACY-003 Quantum Layer必須通過
 QuantumはResearch Toolへ変更。
@@ -101,6 +122,11 @@ Stress LabはValidation Toolの一つへ変更。
 ## LEGACY-005 Trainer中心Loop
 Research Routerによる原因別再研究へ変更。
 
+## LEGACY-006 Single Hypothesis Only Production
+「1つの強いHypothesisだけで本番Tradeする」を固定原則にしない。
+
+複数仮説を利用する場合も票決ではなくTrade Thesisへ構造化する。
+
 ---
 
 # 3. 独立Layerにしない方がよい候補
@@ -109,8 +135,10 @@ Research Routerによる原因別再研究へ変更。
 
 ## Experimental Framework
 - Random Baseline
+- Historical
 - Replay
 - Paper Trade
+- Demo Forward Trial
 - Shadow Trade
 - Counterfactual
 
@@ -122,9 +150,15 @@ Research Routerによる原因別再研究へ変更。
 
 ## Post-Trade Analysis Components
 - Outcome Analyzer
+- Trade Thesis Evaluation
+- Hypothesis Attribution
 - Failure Classification
+- Demo vs Live Evaluation
 - Counterfactual Evaluator
 - Research Router
+
+## Hypothesis Set / Trade Thesis
+新しい巨大Layerにせず、ResearchとProduction間の正式なData Object / Contractとして設計する候補。
 
 ---
 
@@ -143,8 +177,10 @@ Research Routerによる原因別再研究へ変更。
 - Feature ID
 - Formula ID
 - Hypothesis ID
+- Hypothesis Set ID
+- Trade Thesis ID
 - DNA ID
-- Trade ID
+- Trade / Trial ID
 - Research ID
 
 の関係。
@@ -162,25 +198,25 @@ Priorityを何で決めるか。単純Score化しすぎない仕組み。
 Raw / Featureから各DNA軸をどう計算するか。
 
 ## TODO-008 Research Protocol
-Candidate → Experiment → Result → Validation → Approvalの正式状態遷移。
+Candidate → Historical / Replay → OOS / Regime → Demo Forward → Validation → Approvalの正式状態遷移。
 
 ## TODO-009 Causal Edge / Empirical Edge
 Edge Object定義、Applicability、Expiration、Version。
 
 ## TODO-010 Signal Contract
-Signalが読む情報、Gate、Expected Value、NO_TRADE理由。
+Signalが読むTrade Thesis、Gate、Expected Value、NO_TRADE理由。
 
 ## TODO-011 Defense Contract
 Pre-Trade / In-Trade / Portfolio Riskの境界。
 
 ## TODO-012 Entry Thesis
-固定項目、Invalidation、Expected Horizon、Version。
+Trade Thesis Snapshotとしての固定項目、Invalidation、Expected Horizon、Version。
 
 ## TODO-013 Position Supervisor
-観測対象、時間軸、助言閾値、Hard Safetyとの境界。
+複数Hypothesisを含むTrade Thesisの観測対象、時間軸、助言閾値、Hard Safetyとの境界。
 
 ## TODO-014 Post-Trade Attribution
-「仮説」「Signal」「Defense」「Execution」「市場変化」のどこが原因だったかをどう判定するか。
+「各Hypothesis」「Trade Thesis」「Signal」「Defense」「Execution」「市場変化」のどこが原因だったかをどう判定するか。
 
 ## TODO-015 Research Priority
 Research Candidateが大量発生した場合の優先順位。
@@ -199,6 +235,43 @@ Machine JournalのSchemaとHuman Diary生成規則。
 
 ## TODO-020 Multi-Crypto
 BTCからETH / SOLへMarket Profileだけでどこまで差し替え可能かを実証する。
+
+## TODO-021 Demo Forward Contract
+- T0定義
+- 未来データのみを使う保証
+- Trial開始条件
+- Trial終了条件
+- Fee / Spread / Slippage / Latency model
+- Demo Adapter
+- Live Logicとの共通範囲
+
+を正式化する。
+
+## TODO-022 Evidence Channel Contract
+Historical / OOS / Demo / Stress / Liveをどう保存し、どう比較し、どこまで統合可能かを決める。
+
+## TODO-023 Hypothesis Set Contract
+- PRIMARY
+- SUPPORTING
+- CONDITIONAL
+- CONTRADICTING
+- Shared Evidence
+- Dependence
+- Redundancy
+
+の定義。
+
+## TODO-024 Trade Thesis Contract
+Direction / Expected Effect / Expected Horizon / Expected Value / Invalidation / Main Risk / Hypothesis Set Version等を正式定義する。
+
+## TODO-025 Hypothesis Combination Research
+組み合わせ爆発と過学習を防ぐため、最大Hypothesis数、事前登録、OOS / Demo必須条件等を決める。
+
+## TODO-026 Demo vs Live Attribution
+Demo PASS / Live FAIL等の差をExecution / Slippage / Regime / Demo model / Sample不足へ分解する方法を決める。
+
+## TODO-027 Market Event重複補正
+同一EVENT内の複数Trialを独立サンプルとして数えない研究ルールを決める。
 
 ---
 
@@ -225,6 +298,9 @@ Human Diaryを直接学習データとして使用。
 ## HOLD-007
 各Layerが自分自身のコードを自動修正・本番反映。
 
+## HOLD-008
+AI Reviewがその場で新しい未検証Hypothesisを生成し、現在のTrade Thesisへ直接追加すること。
+
 ---
 
 # 6. 本設計MDへ進む際の推奨順序
@@ -240,13 +316,16 @@ Human Diaryを直接学習データとして使用。
 6. Data Contract
 7. Database Schema
 8. Research Protocol
-9. Production / Risk / Execution
-10. Runtime / Boot Sequence
-11. Python Architecture
-12. Monitoring / Recovery / Deployment
-13. Telegram Interface
-14. Test Strategy
-15. Implementation Roadmap
+9. Evidence Channel / Demo Forward Protocol
+10. Hypothesis Set / Trade Thesis Contract
+11. Production / Risk / Execution
+12. Post-Trade Attribution
+13. Runtime / Boot Sequence
+14. Python Architecture
+15. Monitoring / Recovery / Deployment
+16. Telegram Interface
+17. Test Strategy
+18. Implementation Roadmap
 ```
 
 ---
@@ -280,6 +359,6 @@ Human Diaryを直接学習データとして使用。
 
 今のゴールは、
 
-> 本格設計へ入る前に、何がCoreで、何がResearchで、何がProductionで、何がOuter / Operationsなのかを曖昧にしないこと。
+> 本格設計へ入る前に、何がCoreで、何がResearchで、何がProductionで、何がOuter / Operationsなのかを曖昧にせず、さらにResearch Evidenceがどの段階にあり、ProductionがどのHypothesis Setを根拠にTradeしたかを後から完全に説明できる状態を作ること。
 
 この境界が固定できれば、その後の深掘りで新機能が増えても適切なDomainへ配置できる。
