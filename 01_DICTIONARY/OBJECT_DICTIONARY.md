@@ -493,11 +493,11 @@ schema_version:
 
 ## Meaning
 
-Raw Dataを研究可能な単一観測単位へ構造化したObject。
+Raw DataをNormalizerが標準形式へ変換し、研究・比較可能な単一観測値として表すObject。
 
 ## Owner
 
-Normalizer / Observation Processing
+Normalizer
 
 ## Example
 
@@ -513,16 +513,22 @@ metric_or_field:
 value:
 unit:
 observed_at:
+standard_symbol:
 market_profile_id:
 raw_data_refs: []
 normalization_version:
+conversion_history: []
+diagnostics_ref:
 quality_ref:
 trace_id:
 ```
 
 ## Invariants
 
-Observationは「起きた現象の解釈」ではなく観測値。
+- Observationは正規化済みの観測値であり、市場現象の解釈ではない
+- RawData参照を必ず保持し、一次証拠まで逆引き可能にする
+- Timestamp / Unit / Symbol等の変換履歴を失わない
+- Normalization処理でMarket判断・Cause判断を混ぜない
 
 ---
 
@@ -568,33 +574,37 @@ trace_refs: []
 
 ---
 
-# OBJ-DATA-004: NormalizedObservation
+# OBJ-DATA-004: NormalizedObservation [RETIRED / MERGED]
 
-## Meaning
+## Status
 
-Timestamp / Unit / Symbol等が標準化されたObservation。
+RETIRED / MERGED INTO `OBJ-DATA-002: Observation`
 
-## Owner
+## Reason
 
-Normalizer
+旧定義では `Observation` と `NormalizedObservation` が意味・Owner・生成位置で重複していたため、FIX-001で一本化した。
 
-## Main Fields
+Canonical Flow:
 
-```yaml
-normalized_observation_id:
-source_observation_id:
-standard_symbol:
-standard_timestamp:
-standard_value:
-standard_unit:
-conversion_history: []
-normalizer_version:
-diagnostics_ref:
+```text
+Collector
+→ RawData
+→ Normalizer
+→ Observation
+→ Data Quality
+→ Time Series Processor
 ```
 
-## Invariants
+## Migration Rule
 
-NormalizationでRaw Evidenceを失わない。
+旧実装・旧資料で `NormalizedObservation` を参照している場合、新設計では `Observation` へMigrationする。
+
+旧ID `OBJ-DATA-004` は履歴追跡のため再利用しない。
+
+## Prohibitions
+
+- 新規コード・新規DB Schemaで `NormalizedObservation` を新しい独立Objectとして作らない
+- `Observation` と二重保存しない
 
 ---
 
@@ -3256,9 +3266,10 @@ GlobalRiskLimit
 RawData
 Observation
 MarketEvent
-NormalizedObservation
 TimeSeriesMeasurement
 ```
+
+`NormalizedObservation` はFIX-001で `Observation` へ統合済み。旧 `OBJ-DATA-004` は履歴用Tombstoneとしてのみ保持する。
 
 ## Measurement / Feature
 
