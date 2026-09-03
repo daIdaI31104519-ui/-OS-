@@ -793,7 +793,7 @@ trace_id:
 
 ## Meaning
 
-現在条件で各Featureをどの程度注目する価値があるかを表す優先度Object。
+現在Evaluation Cycleで、各Featureをどの程度注目する価値があるかを表す優先度Object。FIX-006により、同一Cycleで後段生成されるMarketDNAを参照せず、原則としてPrevious Confirmed MarketDNAを利用する。
 
 ## Owner
 
@@ -803,25 +803,63 @@ Feature Priority
 
 ```yaml
 priority_profile_id:
+evaluation_cycle_id:
 market_profile_id:
-context_ref:
-dna_reference:
+current_context_ref:
+current_event_refs: []
+previous_confirmed_dna_ref:      # 原則 DNA_(t-1)。Cold Startではnull可
+previous_confirmed_dna_as_of:
+dna_reference_mode:              # PREVIOUS_CONFIRMED | COLD_START_BASELINE
 horizon:
 selected_features: []
 low_priority_features: []
+sentinel_features: []
 priority_reasons: []
 redundancy_map:
 quality_constraints:
+recompute_reason:                # NORMAL_CYCLE | MAJOR_EVENT_NEW_CYCLE 等
 priority_version:
+created_at:
 valid_until:
 ```
 
-## Invariants
+## FIX-006 Cycle Invariants
 
 - Priority = Confidenceではない
 - Low Priority = Raw取得停止ではない
 - Safety Sentinel FeatureはPriority低下だけで観測停止しない
-- Market DNA参照の時系列関係は後続Architecture Contractで循環を起こさないよう固定する
+- `previous_confirmed_dna_ref` は当該`evaluation_cycle_id`より前に確定済みのMarketDNAだけを参照する
+- **同一Evaluation Cycleで後段生成される`MarketDNA_t`を参照してはならない**
+- FeaturePriorityProfile生成後に、同CycleのMarketDNAを使ってPriority理由・選択Featureを事後改変しない
+- Previous Confirmed MarketDNAが存在しないCold Startでは、`dna_reference_mode = COLD_START_BASELINE` とし、Baseline Feature / Sentinel Feature / Current Basic Context中心で生成する
+- Major Regime / Structural Eventで再計算する場合は、同一Cycleを再帰更新せず新しい`evaluation_cycle_id`を発行する
+- `previous_confirmed_dna_ref` / `previous_confirmed_dna_as_of` / `priority_version` を保存し、後から当時のPriority判断を再現できるようにする
+
+## Canonical Cycle
+
+```text
+DNA_(t-1)
++
+Current Basic Context / already-available Event information
+↓
+FeaturePriority_t
+↓
+MarketIntelligence_t
+↓
+Causal_t
+↓
+MarketDNA_t
+↓
+次Evaluation Cycle
+```
+
+禁止:
+
+```text
+FeaturePriority_t
+→ MarketDNA_t
+→ FeaturePriority_t
+```
 
 ---
 
@@ -1123,7 +1161,7 @@ unique_event_count:
 
 ## Meaning
 
-現在または過去の市場状態を比較・検索・研究できる正規化された圧縮表現。
+現在または過去の市場状態を比較・検索・研究できる正規化された圧縮表現。FIX-006では各MarketDNAを特定Evaluation Cycleの後段生成物として扱い、同CycleのFeature Priorityへ逆流させない。
 
 ## Owner
 
@@ -1150,10 +1188,12 @@ cross_market_correlation:
 
 ```yaml
 market_dna_id:
+evaluation_cycle_id:
 dna_definition_version:
 market_profile_id:
 as_of:
 horizon:
+previous_market_dna_ref:
 axis_values:
 axis_quality:
 input_feature_refs: []
@@ -1172,6 +1212,9 @@ uncertainty:
 - Market DNA = 市場状態
 - Feature Priority = 何を見る価値が高いか
 - Signalを直接生成しない
+- `evaluation_cycle_id = t` で生成されたMarketDNAは、同じ`t`のFeaturePriorityProfile入力に使用しない
+- 当該MarketDNAは確定後、次Evaluation Cycle以降で`previous_confirmed_dna_ref`として参照可能になる
+- `previous_market_dna_ref`を保持する場合も、Current DNAとの世代関係を示すためであり、同Cycle再帰計算の許可を意味しない
 
 ---
 
@@ -3454,7 +3497,7 @@ COUNTERFACTUAL
 
 1. 正式State一覧 → `STATE_DICTIONARY.md`
 2. Market DNAとRegimeの正式依存関係 → Architecture / State設計
-3. Feature Priorityが参照するDNAの時系列規則 → Architecture / Data Flow
+3. **Feature Priorityが参照するDNAの時系列原則はFIX-006で確定済み。Field型・Required/Nullable・Cycle境界Validationは `DATA_CONTRACT.md` / Data Flowで固定する**
 4. Soft / Hard ContradictionのProduction Gate → Production Contract
 5. Risk Stateの閾値 → Risk Design / Research
 6. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
