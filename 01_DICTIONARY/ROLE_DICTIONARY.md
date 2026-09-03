@@ -424,7 +424,7 @@ MARKET OBSERVATION
 
 ## Purpose
 
-Sourceごとの表現差を統一し、比較可能な形式へ変換する。
+Sourceごとの表現差を統一し、Raw Dataを比較・研究可能なObservationへ変換する。
 
 ## Inputs
 
@@ -432,7 +432,7 @@ Sourceごとの表現差を統一し、比較可能な形式へ変換する。
 
 ## Outputs
 
-- Normalized Observation
+- Observation
 - Conversion Diagnostics
 
 ## Responsibilities
@@ -469,7 +469,7 @@ MARKET OBSERVATION / SAFETY
 
 ## Inputs
 
-- Raw / Normalized Data
+- Raw Data / Observation
 - Source Metadata
 
 ## Outputs
@@ -515,7 +515,7 @@ MARKET OBSERVATION / MEASUREMENT
 
 ## Inputs
 
-- Normalized Observation
+- Observation
 - Quality Metadata
 
 ## Outputs
