@@ -444,8 +444,6 @@ RETIRED → ACTIVE  # Reopen / Research / Approvalを飛ばさない
 対象:
 
 - `Edge`
-- `FeatureKnowledge`
-- `FormulaKnowledge` のProduction利用可能性
 
 候補State:
 
@@ -461,7 +459,22 @@ RETIRED
 REOPENED
 ```
 
-Hypothesis Lifecycleと完全同一にせず、Edgeは再現可能な優位性の利用状態に重点を置く。
+Hypothesis Lifecycleと完全同一にせず、Edgeは再現可能な優位性としての研究・承認・利用成熟度に重点を置く。
+
+重要:
+
+- `FeatureKnowledge` / `FormulaKnowledge` をEdge Lifecycleへ入れない
+- Feature / Formulaの知識鮮度・再検証必要性は `STATE-KNW-001: Knowledge Aging State` で管理する
+- `Edge` 自身は「Edgeとしての成熟度」と「Knowledgeとしての鮮度」を別State Machineとして同時に持ち得る
+
+例:
+
+```text
+Edge Lifecycle = ACTIVE
+Knowledge Aging = AGING
+```
+
+は成立する。
 
 ---
 
@@ -1961,6 +1974,10 @@ DRAFT → READY → ACTIVE → COMPLETED
 
 Research Plan Lock:
 EDITABLE → PRE_REGISTERED → FROZEN
+
+Edge Lifecycle:
+CANDIDATE → VALIDATING → SUPPORTED → APPROVED → ACTIVE
+ACTIVE → DEGRADED / SUSPENDED / RETIRED → REOPENED
 
 Production Promotion:
 RESEARCH_ONLY → SHADOW → DEMO_FORWARD → MICRO_LIVE → LIMITED_LIVE → NORMAL_LIVE
