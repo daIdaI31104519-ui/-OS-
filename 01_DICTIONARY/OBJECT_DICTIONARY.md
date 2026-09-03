@@ -1811,7 +1811,7 @@ reopen_or_suspend_reason:
 
 ## Meaning
 
-Productionが参照可能なHypothesis / Edgeの登録状態を表すEntry Object。
+Productionが参照するHypothesis / Edgeの登録情報。Hypothesis自身の研究成熟度と、本番で許可された利用段階を混ぜずに保持するEntry Object。
 
 ## Owner
 
@@ -1822,29 +1822,35 @@ Knowledge Promotion / Production
 ```yaml
 pool_entry_id:
 hypothesis_or_edge_ref:
-production_status:
+hypothesis_state_ref:         # Hypothesis / Edge側のLifecycle State参照
+production_stage:             # RESEARCH_ONLY / SHADOW / DEMO_FORWARD / MICRO_LIVE / LIMITED_LIVE / NORMAL_LIVE / PAUSED
 applicability_ref:
 constraint_refs: []
 assessment_profile_ref:
 evidence_package_ref:
-allowed_risk_stage:
+max_production_stage:         # Policy上許可される最大Production Promotion Stage
 expires_or_review_due_at:
 ```
 
-## Candidate Status
+## State Separation
 
 ```text
-CANDIDATE
-RESEARCHING
-DEMO_FORWARD
-SUPPORTED
-WEAK
-HOLD
-RETIRED
-APPROVED_FOR_PRODUCTION
+Hypothesis Lifecycle
+DRAFT / RESEARCHING / SUPPORTED / WEAK / APPROVED / ACTIVE / ...
+
+≠
+
+Production Promotion Stage
+RESEARCH_ONLY / SHADOW / DEMO_FORWARD / MICRO_LIVE / LIMITED_LIVE / NORMAL_LIVE / PAUSED
 ```
 
-Productionは未承認Entryを自由に有効化しない。
+## Invariants
+
+- `SUPPORTED` と `DEMO_FORWARD` を同じstatus列挙へ入れない
+- `APPROVED` はKnowledge / Hypothesisの承認状態であり、現在市場で即取引可能という意味ではない
+- Productionは `hypothesis_state_ref`、`production_stage`、Applicability、Constraint、Risk Stateを別々に確認する
+- 未承認Hypothesis / EdgeをProductionが自由に有効化しない
+- `max_production_stage` をRisk Stateと混同しない
 
 ---
 
