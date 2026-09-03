@@ -61,7 +61,7 @@ Role間で生成・保存・受け渡しされる情報構造。
 RawData
 MarketEvent
 Evidence
-Hypothesis
+CausalHypothesis
 MarketDNA
 TradeThesis
 OrderIntent
@@ -242,9 +242,9 @@ GOVERNANCE / CONTROL
 
 ## Outputs
 
-- Desired Runtime State
-- Market Configuration
-- Global Risk Limit
+- RuntimeCommand
+- MarketProfile / Configuration reference
+- GlobalRiskLimit
 - Adapter Configuration
 
 ## Upstream
@@ -307,9 +307,9 @@ CONNECTION / ADAPTER
 
 ## Outputs
 
-- Standard Raw / Observation compatible data
-- Source Metadata
-- Adapter Diagnostics
+- RawData-compatible payload
+- SourceMetadata
+- Diagnostics
 
 ## Responsibilities
 
@@ -337,7 +337,7 @@ CONNECTION / ADAPTER
 
 ## Purpose
 
-標準Order Intentを取引所固有注文へ変換し、注文・約定情報を標準形式へ戻す。
+標準OrderIntentを取引所固有注文へ変換し、注文・約定情報を標準形式へ戻す。
 
 ## Owns
 
@@ -348,14 +348,13 @@ CONNECTION / ADAPTER
 
 ## Inputs
 
-- Order Intent
+- OrderIntent
 - Exchange Configuration
 
 ## Outputs
 
-- Exchange Order Request
-- Fill / Order Status
-- Execution Diagnostics
+- ExecutionRecord
+- Diagnostics
 
 ## Responsibilities
 
@@ -390,9 +389,9 @@ MARKET OBSERVATION
 
 ## Outputs
 
-- Raw Data
-- Acquisition Metadata
-- Collection Diagnostics
+- RawData
+- SourceMetadata
+- Diagnostics
 
 ## Responsibilities
 
@@ -413,7 +412,7 @@ MARKET OBSERVATION
 
 ## Research Feedback
 
-繰り返すSource latency / missing patternはResearch Candidate化可能。
+繰り返すSource latency / missing patternはResearchCandidate化可能。
 
 ---
 
@@ -424,16 +423,16 @@ MARKET OBSERVATION
 
 ## Purpose
 
-Sourceごとの表現差を統一し、Raw Dataを比較・研究可能なObservationへ変換する。
+Sourceごとの表現差を統一し、RawDataを比較・研究可能なObservationへ変換する。
 
 ## Inputs
 
-- Raw Data
+- RawData
 
 ## Outputs
 
 - Observation
-- Conversion Diagnostics
+- Diagnostics
 
 ## Responsibilities
 
@@ -469,16 +468,13 @@ MARKET OBSERVATION / SAFETY
 
 ## Inputs
 
-- Raw Data / Observation
-- Source Metadata
+- RawData / Observation
+- SourceMetadata
 
 ## Outputs
 
-- Quality Status
-- Quality Score / Profile
-- Issues
-- Freshness
-- Confidence Limit
+- QualityProfile
+- Diagnostics
 
 ## Responsibilities
 
@@ -516,11 +512,11 @@ MARKET OBSERVATION / MEASUREMENT
 ## Inputs
 
 - Observation
-- Quality Metadata
+- QualityProfile
 
 ## Outputs
 
-- Time Series Measurements / Inputs
+- TimeSeriesMeasurement
 
 ## Responsibilities
 
@@ -563,12 +559,12 @@ OS全体で利用する計算式・測定定義を共通化する。
 
 ## Inputs
 
-- Raw / Observation / Time Series / Other approved inputs
+- RawData / Observation / TimeSeriesMeasurement / Other approved inputs
 
 ## Outputs
 
-- Versioned Measurement Result
-- Formula provenance
+- MeasurementResult
+- FormulaDefinition reference
 
 ## Responsibilities
 
@@ -593,20 +589,20 @@ MARKET UNDERSTANDING
 
 ## Purpose
 
-Raw / Observation / Time Seriesから市場理解に利用できるVersioned Featureを生成する。
+RawData / Observation / TimeSeriesMeasurementから市場理解に利用できるVersioned Featureを生成する。
 
 ## Inputs
 
-- Approved Formula
-- Observation / Time Series
-- Quality
+- Approved FormulaDefinition
+- Observation / TimeSeriesMeasurement
+- QualityProfile
 
 ## Outputs
 
 - Feature
-- Formula Version Reference
-- Quality / Confidence
-- Trace
+- FormulaDefinition reference
+- QualityProfile reference
+- Trace reference
 
 ## Responsibilities
 
@@ -642,10 +638,7 @@ MARKET UNDERSTANDING
 
 ## Outputs
 
-- Priority Profile
-- Selected / Low Priority Features
-- Priority Reason
-- Priority Version
+- FeaturePriorityProfile
 
 ## Responsibilities
 
@@ -676,19 +669,18 @@ MARKET UNDERSTANDING
 ## Inputs
 
 - Feature
-- Feature Priority
-- Market Event
-- Data Quality
+- FeaturePriorityProfile
+- MarketEvent
+- QualityProfile
 - Context
 
 ## Outputs
 
-- Market Context
-- Evidence Candidate / Evidence
-- Event / State
+- MarketContext
+- Evidence
 - Contradiction
-- Unexplained Event
-- Confidence / Uncertainty
+- UnexplainedEvent
+- ResearchCandidate（必要時）
 
 ## Responsibilities
 
@@ -712,11 +704,11 @@ MARKET UNDERSTANDING
 
 ## Failure Behavior
 
-説明不能なら物語を作らず `UNEXPLAINED_EVENT` とする。
+説明不能なら物語を作らず `UnexplainedEvent` とする。
 
 ## Research Feedback
 
-Unexplained Event / interpretation anomalyをResearch Candidateへ送る。
+UnexplainedEvent / interpretation anomalyをResearchCandidateへ送る。
 
 ---
 
@@ -731,22 +723,20 @@ MARKET UNDERSTANDING / CAUSAL
 
 ## Inputs
 
-- Market Intelligence
+- MarketContext
 - Evidence
-- Market Event
-- Feature / Priority
-- Context
-- Historical Case
-- Quality / Uncertainty
+- MarketEvent
+- Feature / FeaturePriorityProfile
+- MarketCase
+- QualityProfile / Uncertainty
 
 ## Outputs
 
-- Cause Candidate
-- Causal Hypothesis
-- Alternative Hypothesis
+- CauseCandidate
+- CausalHypothesis
 - Contradiction
-- Research Test Request
-- Hypothesis Lifecycle Update Candidate
+- ResearchCandidate
+- HypothesisAssessmentProfile / State Transition recommendation
 
 ## Responsibilities
 
@@ -755,10 +745,10 @@ MARKET UNDERSTANDING / CAUSAL
 - Temporal Order
 - Lag
 - Confounder
-- Alternative Hypothesis
+- Alternative HypothesisをCausalHypothesis関係として保持
 - Contradiction
 - Evidence Strength profile
-- Historical / OOS / Regime / Stress検証要求
+- Historical / OOS / Regime / Stress検証要求をResearchCandidateへ変換
 - Hypothesis Lifecycle管理材料
 
 ## Prohibitions
@@ -787,22 +777,20 @@ MARKET UNDERSTANDING / KNOWLEDGE INTERFACE
 
 ## Inputs
 
-- Market Context
+- MarketContext
 - Feature
 - Causal / Evidence information
 - Approved DNA Formula / Axis definitions
 
 ## Outputs
 
-- Market DNA
-- Similarity Result
-- Novelty Result
-- Similar Case References
+- MarketDNA
+- MarketCase references
 
 ## Responsibilities
 
 - DNA axis計算
-- Similarity / Novelty用表現生成
+- Similarity / NoveltyをMarketDNA内の追跡可能なProfileとして生成
 - Raw / Feature / Formula Versionへ追跡可能にする
 
 ## Prohibitions
@@ -813,7 +801,7 @@ MARKET UNDERSTANDING / KNOWLEDGE INTERFACE
 
 ## Research Feedback
 
-低Similarity / 高NoveltyはNovel Regime Research Candidate候補。
+低Similarity / 高NoveltyはNovel Regime ResearchCandidate候補。
 
 ---
 
@@ -826,24 +814,22 @@ RESEARCH
 
 ## Purpose
 
-Research Candidateを適切な研究方式へ振り分け、実験・Validation・Evidence Package生成を管理する。
+ResearchCandidateを適切な研究方式へ振り分け、実験・Validation・EvidencePackage生成を管理する。
 
 ## Inputs
 
-- Research Candidate
-- Hypothesis
-- Feature / Formula Candidate
-- DNA Candidate
+- ResearchCandidate
+- CausalHypothesis / Edge / Feature / Formula / MarketDNA等の研究対象
 - Failure / Unexpected Success
-- Demo / Live Divergence
+- DemoLiveDivergence
 
 ## Outputs
 
-- Research Plan
-- Research Result
-- Validation Request / Result
-- Candidate Knowledge / Edge
-- Negative Knowledge Candidate
+- ResearchPlan
+- ResearchResult
+- EvidencePackage
+- Edge / Candidate Knowledge
+- NegativeKnowledge candidate
 
 ## Responsibilities
 
@@ -886,16 +872,16 @@ RESEARCH SUBSYSTEM
 
 ## Inputs
 
-- Research Plan
-- Hypothesis / Hypothesis Set Candidate
+- ResearchPlan
+- CausalHypothesis / ApplicableHypothesisSet candidate / other research target
 - Market Data / Replay Data
 - Execution Model
 
 ## Outputs
 
-- Trial Result
-- Evidence Source Metadata
-- Experiment Diagnostics
+- ResearchResult
+- Evidence Source Channel / Metadata reference
+- Diagnostics
 
 ## Responsibilities
 
@@ -918,18 +904,18 @@ RESEARCH / VALIDATION
 
 ## Purpose
 
-Research Candidate / Edge / Hypothesis SetがProduction候補になれるか検証する。
+ResearchCandidate / Edge / Hypothesis SetがProduction候補になれるか検証する。
 
 ## Inputs
 
-- Research Result
-- Hypothesis / Edge Candidate
+- ResearchResult
+- CausalHypothesis / Edge candidate
 
 ## Outputs
 
-- Historical / OOS / Regime / Demo / Stress Validation Result
+- ResearchResult
 - FailureBoundary
-- Constraint Candidate
+- Constraint candidate / reference
 
 ## Responsibilities
 
@@ -937,6 +923,7 @@ Research Candidate / Edge / Hypothesis SetがProduction候補になれるか検�
 - Regime Stability
 - Stress Lab
 - FailureBoundary抽出
+- Historical / OOS / Regime / Demo / Stressの違いは別Object名ではなくResearchResultのEvidence Source Channel / Experiment Modeで保持する
 
 ## Prohibitions
 
@@ -966,21 +953,21 @@ KNOWLEDGE
 - FailureBoundary
 - Constraint
 - NegativeKnowledge
-- Relationship
+- KnowledgeRelationship
 
 ## Inputs
 
 - Approved / Candidate Knowledge
-- Research Result
-- Production Evidence
+- ResearchResult
+- ProductionEvidence
 - Post-Trade Attribution
 
 ## Outputs
 
-- Knowledge Query Result
-- Similar Cases
-- Approved Knowledge References
-- Aging / Revalidation Candidate
+- Knowledge Object references / Query result
+- MarketCase references
+- Approved Knowledge references
+- ResearchCandidate（Aging / Revalidation必要時）
 
 ## Responsibilities
 
@@ -1002,13 +989,13 @@ GOVERNANCE FUNCTION / KNOWLEDGE
 
 ## Purpose
 
-Research ResultをProduction利用可能Knowledgeへ昇格させる前に、Validation・状態・互換性を確認する。
+ResearchResultをProduction利用可能Knowledgeへ昇格させる前に、Validation・状態・互換性を確認する。
 
 ## Inputs
 
 - Candidate Knowledge / Edge
-- Validation Result
-- Constraints
+- ResearchResult / EvidencePackage
+- Constraint
 - Uncertainty
 
 ## Outputs
@@ -1020,7 +1007,7 @@ Research ResultをProduction利用可能Knowledgeへ昇格させる前に、Vali
 
 ## Prohibitions
 
-- Research Resultを無検証でProductionへ通す
+- ResearchResultを無検証でProductionへ通す
 - AI Reviewだけで承認する
 
 ## Note
@@ -1038,24 +1025,21 @@ PRODUCTION ADVISORY
 
 ## Purpose
 
-市場理解OSが作ったTrade Thesis / Evidence / Hypothesis Setを外部知能として独立査読する。
+市場理解OSが作ったTradeThesis / Evidence / ApplicableHypothesisSetを外部知能として独立査読する。
 
 ## Inputs
 
-- Trade Thesis Package
-- Market DNA
+- TradeThesis
+- MarketDNA
 - Evidence
-- Contradictions
-- Research Evidence
-- Constraints
+- Contradiction
+- EvidencePackage
+- Constraint
 
 ## Outputs
 
-- Review Opinion
-- TRADE / WAIT / REJECT advisory
-- Contradiction / Missing Information
-- Uncertainty contribution
-- New Research Candidate
+- AIReviewResult
+- ResearchCandidate（新規研究案が出た場合）
 
 ## Responsibilities
 
@@ -1082,27 +1066,24 @@ PRODUCTION
 
 ## Purpose
 
-現在のTrade ThesisにRiskを取る合理性・期待値があるか判断する。
+現在のTradeThesisにRiskを取る合理性・期待値があるか判断する。
 
 ## Inputs
 
-- Trade Thesis
-- Applicable Hypothesis Set reference
-- Causal / Empirical Edge
+- TradeThesis
+- ApplicableHypothesisSet reference
+- Edge
 - Expected Value
-- Market Context / DNA
-- Similar Cases
-- Feature Priority
+- MarketContext / MarketDNA
+- MarketCase references
+- FeaturePriorityProfile
 - Constraint
-- Data Quality / Uncertainty
-- AI Review
+- QualityProfile / Uncertainty
+- AIReviewResult
 
 ## Outputs
 
-- BUY
-- SELL
-- NO_TRADE
-- Signal Diagnostics / Reason
+- SignalDecision
 
 ## Responsibilities
 
@@ -1112,7 +1093,7 @@ PRODUCTION
 ## Prohibitions
 
 - Defense責任を吸収する
-- AI Reviewだけで決定
+- AIReviewResultだけで決定
 - 全情報を意味不明な一つの総合Scoreへ潰す
 
 ---
@@ -1124,26 +1105,23 @@ PRODUCTION / SAFETY
 
 ## Purpose
 
-Signalが存在しても、現在Riskを取って安全かGateする。
+SignalDecisionが存在しても、現在Riskを取って安全かGateする。
 
 ## Inputs
 
-- Signal
+- SignalDecision
 - Constraint
-- Data Quality
+- QualityProfile
 - Liquidity / Spread / Slippage Risk
 - DD / Consecutive Losses
 - Exposure
 - API / Exchange Health
 - Abnormal Event
-- Global Risk Limit
+- GlobalRiskLimit
 
 ## Outputs
 
-- ALLOW
-- REDUCE
-- BLOCK
-- Defense Reason
+- DefenseDecision
 
 ## Responsibilities
 
@@ -1153,12 +1131,12 @@ Signalが存在しても、現在Riskを取って安全かGateする。
 ## Prohibitions
 
 - Expected Valueを作る
-- Trade Thesis生成
+- TradeThesis生成
 - BUY / SELL方向生成
 
 ## Research Feedback
 
-BLOCKしたTrade ThesisはShadow追跡候補。
+BLOCKしたTradeThesisはShadow追跡候補。
 
 ---
 
@@ -1169,18 +1147,18 @@ PRODUCTION / EXECUTION
 
 ## Purpose
 
-Signal / Defense承認後、どの注文計画で実行するか決める。
+SignalDecision / DefenseDecision承認後、どの注文計画で実行するか決める。
 
 ## Inputs
 
-- Approved Signal
-- Defense Result
+- SignalDecision
+- DefenseDecision
 - Risk Budget
 - Liquidity / Slippage information
 
 ## Outputs
 
-- Order Intent
+- OrderIntent
 
 ## Responsibilities
 
@@ -1213,29 +1191,24 @@ PRODUCTION / IN-TRADE INTELLIGENCE
 
 ## Purpose
 
-Position保有中にEntry Thesis / Trade Thesisがまだ成立しているか監督し、Exit Engineへ助言する。
+Position保有中にEntryThesis / TradeThesisがまだ成立しているか監督し、Exit Engineへ助言する。
 
 ## Inputs
 
-- Entry Thesis Snapshot
+- EntryThesis
 - Hypothesis state updates
 - Current Evidence
-- Market Context
+- MarketContext
 - Time / Expected Horizon
 
 ## Outputs
 
-- HOLD
-- WATCH
-- CAUTION
-- THESIS_WEAKENING
-- THESIS_INVALIDATED
-- EMERGENCY advisory / signal candidate
-- Thesis Health diagnostics
+- PositionThesisState
+- Diagnostics
 
 ## Responsibilities
 
-- Trade Thesis全体の健全性監視
+- TradeThesis全体の健全性監視
 - Hypothesis Decay / Thesis Decay監視
 - Contradicting Hypothesis強化監視
 
@@ -1271,13 +1244,12 @@ Position保有中の強制安全制約を監視する。
 - Data Health
 - Liquidity
 - Risk Limits
-- Hard Constraints
+- Hard Constraint
 
 ## Outputs
 
-- CONTINUE
-- REDUCE / SAFETY ACTION candidate
-- EMERGENCY_EXIT
+- ExitDecision / safety action request
+- Diagnostics
 
 ## Responsibilities
 
@@ -1306,21 +1278,18 @@ PRODUCTION / EXIT
 
 ## Inputs
 
-- Trade Thesis Health
+- PositionThesisState
 - Supervisor Advisory
 - PnL
 - Time / Horizon
 - Liquidity
 - Stop / Take Profit
-- Risk
-- In-Trade Defense state
+- RiskState
+- In-Trade Defense information
 
 ## Outputs
 
-- HOLD
-- PARTIAL_EXIT candidate
-- EXIT
-- Exit Reason
+- ExitDecision
 
 ## Responsibilities
 
@@ -1329,8 +1298,8 @@ PRODUCTION / EXIT
 
 ## Prohibitions
 
-- Entry Thesisを書き換える
-- Research Candidateを直接Production Ruleへ反映
+- EntryThesisを書き換える
+- ResearchCandidateを直接Production Ruleへ反映
 
 ---
 
@@ -1348,24 +1317,24 @@ Trade / Trial / Runtime処理の事実を追跡可能な形で記録する。
 ## Inputs
 
 - Trade / Trial Events
-- Signal / Defense / Execution / Supervisor states
-- Market Event / Trace references
+- SignalDecision / DefenseDecision / ExecutionRecord / PositionThesisState
+- MarketEvent / Trace references
 
 ## Outputs
 
-- Immutable-style Event / Audit Records
-- Trade / Trial Record
+- AuditEvent / immutable log records
+- TradeResult（Trade完了時）
 
 ## Responsibilities
 
 - 事実保存
 - Version / Trace / Event ID保持
-- Entry Thesis Snapshot保存
+- EntryThesis保存
 
 ## Prohibitions
 
 - 「なぜ負けた」を確定する
-- Research結果を生成する
+- ResearchResultを生成する
 - ログから勝手にTrainerへ送る
 
 ---
@@ -1377,26 +1346,26 @@ POST-TRADE / ANALYSIS
 
 ## Purpose
 
-Trade / Demo結果を、Trade OutcomeとHypothesis / Execution / Risk Outcomeへ分解する。
+TradeResult / Demo等の結果を、Trade OutcomeとHypothesis / Execution / Risk Outcomeへ分解する。
 
 ## Inputs
 
 - Logger Records
-- Trade Result / Demo Result
-- Entry Thesis
+- TradeResult
+- EntryThesis
 - Hypothesis states
-- Execution data
+- ExecutionRecord
 
 ## Outputs
 
-- Outcome Analysis
-- Trade Thesis Evaluation
-- Hypothesis Attribution
-- Defense Evaluation
-- Execution Evaluation
-- Supervisor Evaluation
-- Demo vs Live Evaluation
-- Research Candidate
+- OutcomeAnalysisResult
+- TradeThesisEvaluation
+- HypothesisAttribution
+- DefenseEvaluation
+- SupervisorEvaluation
+- DemoLiveDivergence
+- CounterfactualResult
+- ResearchCandidate
 
 ## Responsibilities
 
@@ -1417,17 +1386,18 @@ POST-TRADE / RESEARCH INTERFACE
 
 ## Purpose
 
-Post-Trade / Runtime / Market理解で発生したResearch Candidateを原因領域別に適切なResearchへ送る。
+Post-Trade / Runtime / Market理解で発生したResearchCandidateを原因領域別に適切なResearchへ送る。
 
 ## Inputs
 
-- Research Candidate
-- Attribution Result
+- ResearchCandidate
+- HypothesisAttribution
 - Failure / Unexpected Success
 
 ## Outputs
 
-- Routed Research Task / Queue Candidate
+- ResearchRoute
+- ResearchCandidate reference
 
 ## Responsibilities
 
@@ -1465,16 +1435,15 @@ Python Process群を正しい順序・依存関係・状態で起動・停止・
 
 ## Inputs
 
-- Desired State from Outer
+- RuntimeCommand / Desired State
 - Configuration
 - Dependency Status
 - Health Status
 
 ## Outputs
 
-- Actual Runtime State
-- Process State
-- Runtime Diagnostics
+- SystemStatus
+- Diagnostics
 
 ## Responsibilities
 
@@ -1518,10 +1487,10 @@ PLATFORM / OBSERVABILITY
 
 ## Outputs
 
-- Health Status
+- SystemStatus / health update
+- ResourceSnapshot
+- ErrorEvent / Incident candidate
 - Alert
-- Degradation Event
-- Resource Anomaly
 
 ## Responsibilities
 
@@ -1551,18 +1520,15 @@ PLATFORM / RESILIENCE
 
 ## Inputs
 
-- Error / Health Event
-- Runtime State
+- ErrorEvent / Incident
+- SystemStatus
 - Recovery Policy
 
 ## Outputs
 
-- Retry / Backoff
-- Isolation
-- Source Switch request
-- Process Restart
-- Safe Pause
-- Escalation
+- RecoveryAction
+- RuntimeCommand / safe-pause request
+- Diagnostics
 
 ## Responsibilities
 
@@ -1598,7 +1564,8 @@ PLATFORM / RELEASE
 
 ## Outputs
 
-- Development / Replay / Paper / Canary / Production deployment
+- Deployment state / release record candidate
+- MigrationRecord（Migration時）
 - Rollback target
 
 ## Responsibilities
@@ -1609,7 +1576,7 @@ PLATFORM / RELEASE
 
 ## Prohibitions
 
-- 未承認Research Resultの直接Production投入
+- 未承認ResearchResultの直接Production投入
 
 ---
 
@@ -1624,7 +1591,7 @@ INTERFACE / HUMAN CONTROL
 
 ## Inputs
 
-- System Status
+- SystemStatus
 - Market Status Summary
 - Alerts
 - Human Command
@@ -1632,7 +1599,7 @@ INTERFACE / HUMAN CONTROL
 ## Outputs
 
 - Display / Notification
-- Authenticated Command Request
+- RuntimeCommand request / authenticated command request
 
 ## Responsibilities
 
@@ -1783,8 +1750,7 @@ Evidence
 CausalHypothesis
 MarketDNA
 ResearchResult
-CausalEdge
-EmpiricalEdge
+Edge
 Failure
 FailureBoundary
 Constraint
@@ -1934,7 +1900,7 @@ Router = どの研究へ送るか
 
 各Roleは本来責務を超えて自分自身を研究しない。
 
-ただしProcessing Contractの副産物としてResearch Candidateを出せる。
+ただしProcessing Contractの副産物としてResearchCandidateを出せる。
 
 例:
 
@@ -1956,7 +1922,7 @@ Monitoring → resource growth anomaly
 
 ```text
 Role
-→ Research Candidate
+→ ResearchCandidate
 → Research Queue / Router
 → Research
 ```
@@ -2099,7 +2065,35 @@ PYTHON_ARCHITECTURE.md
 
 ---
 
-# 15. 現段階の基本思想
+# 15. 正式Object名の利用原則
+
+RoleのInputs / OutputsでPersistent Objectを指す場合、`OBJECT_DICTIONARY.md` の正式Object名を使用する。
+
+Legacy /曖昧表現:
+
+```text
+FeatureResult
+Trial Result
+ResearchTrialResult
+Validation Result
+Research Test Request
+CausalEdge / EmpiricalEdge（別Object名としての使用）
+```
+
+新規設計での正式表現:
+
+```text
+Feature
+ResearchResult
+ResearchCandidate
+Edge + edge_type
+```
+
+Historical / OOS / Regime / Demo / Stress等の研究結果は、別Result Object名を増やさず、`ResearchResult` の `evidence_source_channel` / `experiment_mode` / Trial参照で区別する。
+
+---
+
+# 16. 現段階の基本思想
 
 市場理解OSでは、機能数を増やすことを完成度としない。
 
