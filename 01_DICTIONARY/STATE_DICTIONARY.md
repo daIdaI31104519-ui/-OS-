@@ -554,28 +554,113 @@ Early Stop / Futility / Risk / Resource理由で研究終了。
 
 - `ResearchPlan`
 
-候補State:
+正式候補State:
 
 ```text
 DRAFT
-PRE_REGISTERED
 READY
-RUNNING
-FROZEN
+ACTIVE
 COMPLETED
 SUPERSEDED
 CANCELLED
 ```
 
+## DRAFT
+
+研究計画を作成・編集している段階。
+
+## READY
+
+必要な定義・評価基準・Data Scope等が揃い、Trial開始可能。
+
+## ACTIVE
+
+このPlanに基づくResearch Trialが1件以上実行中、または研究全体が継続中。
+
+重要:
+
+> `ACTIVE` はPlanが編集可能という意味ではない。Planの編集可否は別の `ResearchPlan Lock State` で表す。
+
+## COMPLETED
+
+PlanのCompletion Criteriaを満たし、計画として完了。
+
+## SUPERSEDED
+
+新VersionのResearchPlanへ置換済み。
+
+## CANCELLED
+
+実行前または途中で計画を正式に取消。
+
+### 基本遷移
+
+```text
+DRAFT
+→ READY
+→ ACTIVE
+→ COMPLETED
+
+DRAFT / READY / ACTIVE
+→ CANCELLED
+
+DRAFT / READY / ACTIVE / COMPLETED
+→ SUPERSEDED
+```
+
+---
+
+# STATE-RSCH-002-L: ResearchPlan Lock State
+
+対象:
+
+- `ResearchPlan`
+
+目的:
+
+> PlanのLifecycleとは別に、評価規則・Data Scope・Metric・Stop Rule等を変更してよいかを表す。
+
+正式候補State:
+
+```text
+EDITABLE
+PRE_REGISTERED
+FROZEN
+```
+
+## EDITABLE
+
+研究計画を編集可能。
+
 ## PRE_REGISTERED
 
-評価指標・Entry / Continue / Stop / Completion条件を結果を見る前に固定。
+結果を見る前に主要評価条件を事前登録済み。変更には理由・Version更新を要求できる。
 
 ## FROZEN
 
-Demo Forward等でT0以降のRule変更を禁止するため固定された状態。
+Demo Forward / Holdout等で、T0以降の評価規則を変更禁止とする固定状態。
 
-変更する場合、同Planを上書きせず新Versionを作る。
+変更が必要なら同じPlanを上書きせず、新Plan Versionを作成する。
+
+### 許可される組み合わせ例
+
+```text
+Lifecycle = READY   + Lock = PRE_REGISTERED
+Lifecycle = ACTIVE  + Lock = PRE_REGISTERED
+Lifecycle = ACTIVE  + Lock = FROZEN
+Lifecycle = COMPLETED + Lock = FROZEN
+```
+
+重要:
+
+> `ACTIVE` と `FROZEN` は矛盾しない。前者は研究計画の進行状態、後者は編集可否を表す。
+
+禁止:
+
+```text
+FROZENだからLifecycleもFROZENと扱う
+ACTIVEだから評価Ruleを自由に変更する
+```
 
 ---
 
@@ -717,7 +802,7 @@ ConstraintはProduction Safetyへ直接影響するため、未承認Stateを本
 対象:
 
 - Hypothesis / Edge / Strategy / Rule等の本番利用段階
-- `HypothesisPoolEntry.allowed_risk_stage`
+- `HypothesisPoolEntry.production_stage`
 
 正式候補Stage:
 
@@ -1444,6 +1529,8 @@ Stateは誰でも自由に書き換えられるものではない。
 |---|---|
 | Hypothesis | Causal Engine + Research / Approval |
 | Research Candidate | Research Orchestrator |
+| Research Plan Lifecycle | Research Orchestrator |
+| Research Plan Lock | Research Orchestrator / Validation Framework |
 | Research Trial | Experimental / Validation Framework |
 | Knowledge Aging | Knowledge Aging Governance |
 | Production Promotion | Approval + Risk Governance |
@@ -1867,6 +1954,13 @@ NEW → SCREENING → QUEUED → RUNNING → COMPLETED
                     ├→ MERGED
                     ├→ REJECTED
                     └→ EXPIRED
+
+Research Plan Lifecycle:
+DRAFT → READY → ACTIVE → COMPLETED
+       └──────────────→ SUPERSEDED / CANCELLED
+
+Research Plan Lock:
+EDITABLE → PRE_REGISTERED → FROZEN
 
 Production Promotion:
 RESEARCH_ONLY → SHADOW → DEMO_FORWARD → MICRO_LIVE → LIMITED_LIVE → NORMAL_LIVE
