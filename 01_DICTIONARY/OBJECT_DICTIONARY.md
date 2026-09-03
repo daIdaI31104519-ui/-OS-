@@ -213,8 +213,8 @@ Hypothesis ID
 ```text
 RawData
 MarketEvent
-FeatureResult
-ResearchTrialResult
+Feature
+ResearchResult
 EntryThesis
 OrderIntent
 TradeResult
@@ -222,6 +222,37 @@ ProductionEvidence
 ```
 
 修正が必要な場合は元Objectを上書きせず、新Version / Correction Object / Superseded関係を使う。
+
+## FIX-005 正式Object名 / Legacy Alias
+
+過去の草案・会話・Role定義で使われた次の表現は、新規設計上の独立Object名として使用しない。
+
+```text
+FeatureResult
+→ Feature
+
+ResearchTrialResult
+Trial Result
+Historical Validation Result
+OOS Validation Result
+Regime Validation Result
+Demo Validation Result
+Validation Result
+→ ResearchResult
+
+Research Test Request
+→ ResearchCandidate
+
+CausalEdge / EmpiricalEdge を別Objectとして使用
+→ Edge + edge_type = CAUSAL_EDGE / EMPIRICAL_EDGE
+```
+
+原則:
+
+- Legacy名を理由に新しいTable / Class / Objectを増やさない
+- 過去資料を読む時は上記Mappingで解釈する
+- Historical / OOS / Replay / Demo / Stress等の研究経路は、原則 `ResearchResult` の `evidence_source_channel` / `experiment_mode` / `trial_id` で区別する
+- Stress固有のFailure Boundary研究では、正式な `StressResult` を追加の専門Objectとして持つことができる。これは一般的なResearch結果名の乱立とは区別する
 
 ## Versioned Mutable Knowledge型
 
@@ -865,7 +896,7 @@ created_at:
 ## Invariants
 
 - Evidence Source Channelを保持する
--同じ証拠を複数Hypothesisで共有する場合 `shared_evidence` として追跡する
+- 同じ証拠を複数Hypothesisで共有する場合 `shared_evidence` として追跡する
 - Evidenceの数をそのまま強さとみなさない
 
 ---
@@ -1317,7 +1348,7 @@ status:
 
 ## Meaning
 
-Research Trialで観測された結果を、結論とDiagnosticsを分けて保存するObject。
+ResearchTrialで観測された結果を、結論とDiagnosticsを分けて保存する正式な共通研究結果Object。
 
 ## Owner
 
@@ -1343,7 +1374,10 @@ created_at:
 
 ## Invariants
 
-失敗結果も保存する。
+- 失敗結果も保存する
+- Historical / OOS / Regime / Replay / Demo等の違いを理由に `HistoricalValidationResult` 等の別Result Objectを乱立させない
+- 研究経路は `ResearchTrial.experiment_mode`、`evidence_source_channel`、Trial参照で区別する
+- Stress固有の境界情報が必要な場合は、ResearchResultとTrace可能な `StressResult` / `FailureBoundary` を併用できる
 
 ---
 
@@ -2949,27 +2983,27 @@ TradeThesis
 主要判断Objectは最低限次の経路を逆引きできることを目標とする。
 
 ```text
-Trade Result
+TradeResult
 ↓
-Entry Thesis
+EntryThesis
 ↓
-Trade Thesis
+TradeThesis
 ↓
-Applicable Hypothesis Set
+ApplicableHypothesisSet
 ↓
-Hypothesis / Edge
+CausalHypothesis / Edge
 ↓
 Evidence
 ↓
 Feature
 ↓
-Formula / Measurement
+FormulaDefinition / MeasurementResult
 ↓
-Observation / Market Event
+Observation / MarketEvent
 ↓
-Raw Data
+RawData
 ↓
-Source
+SourceMetadata
 ```
 
 ---
@@ -2989,7 +3023,7 @@ Affected Evidence
 ↓
 Affected Hypothesis
 ↓
-Affected Trade Thesis
+Affected TradeThesis
 ↓
 Affected Active Position
 ```
