@@ -630,11 +630,11 @@ MARKET UNDERSTANDING
 ## Inputs
 
 - Historical / OOS usefulness
-- Current Context / Event
+- Current Basic Context / already-available Event information
 - Time / Horizon
-- Data Quality
+- QualityProfile
 - Feature Stability / Redundancy
-- Market DNA関連情報
+- **Previous Confirmed MarketDNA reference (`DNA_t-1`)**
 
 ## Outputs
 
@@ -642,14 +642,50 @@ MARKET UNDERSTANDING
 
 ## Responsibilities
 
-- 注目優先順位生成
-- Low Priority判断も保存
+- 現在Cycleで注目するFeatureの優先順位を生成する
+- Low Priority判断も保存する
+- FeaturePriorityProfileへ参照したPrevious Confirmed MarketDNAと、その`as_of` / Versionを残す
+- Cold StartでPrevious Confirmed MarketDNAが存在しない場合は、Baseline / Sentinel中心でPriorityを生成し、DNA未参照であることを明示する
+- Major Regime / Structural Event等で再計算が必要な場合は、同一Cycleを自己参照で再計算せず、新しいEvaluation Cycleとして再評価する
 
 ## Prohibitions
 
 - Low Priority FeatureのRaw取得を無条件停止する
 - Signal化
 - Priority = Confidenceと扱う
+- **同一Evaluation Cycleの後段で生成される`DNA_t`を、同じCycleのFeature Priority入力へ戻すこと**
+- FeaturePriorityProfile生成後に、そのCycleのMarketDNAを使ってPriority理由を事後改変すること
+- Sentinel FeatureをPriority低下だけで観測停止すること
+
+## FIX-006 Cycle Boundary
+
+通常経路を次へ固定する。
+
+```text
+Previous Confirmed MarketDNA = DNA_(t-1)
++
+Current Basic Context / already-available Event information
+↓
+FeaturePriority_t
+↓
+MarketIntelligence_t
+↓
+Causal_t
+↓
+MarketDNA_t
+↓
+次Evaluation Cycleで参照可能
+```
+
+禁止循環:
+
+```text
+FeaturePriority_t
+→ MarketDNA_t
+→ FeaturePriority_t
+```
+
+重大Event時も`DNA_t`を同じCycleへ逆流させない。必要なら新しい`evaluation_cycle_id`を発行し、直前に確定済みのMarketDNAと最新Context / Eventを使って新Cycleとして再評価する。
 
 ## Research Feedback
 
@@ -789,15 +825,18 @@ MARKET UNDERSTANDING / KNOWLEDGE INTERFACE
 
 ## Responsibilities
 
+- 現Evaluation CycleのMarketDNA (`DNA_t`) を生成する
 - DNA axis計算
 - Similarity / NoveltyをMarketDNA内の追跡可能なProfileとして生成
 - Raw / Feature / Formula Versionへ追跡可能にする
+- `evaluation_cycle_id` と必要に応じてPrevious Confirmed MarketDNA参照を保持し、Cycle間の因果順序を追跡可能にする
 
 ## Prohibitions
 
 - Market DNAをSignalそのものにする
 - 「似ている = 同じ結果」と断定する
 - Feature Priorityと同一概念化する
+- **生成した`DNA_t`を同じEvaluation CycleのFeature Priorityへ逆流させること**
 
 ## Research Feedback
 
@@ -1840,9 +1879,22 @@ Research = 実際に検証する
 ## Market DNA vs Feature Priority
 
 ```text
-DNA = 今はどんな市場か
-Priority = 今は何を見る価値が高いか
+MarketDNA_t = 現Evaluation Cycleで確定する詳細な市場状態
+FeaturePriority_t = Previous Confirmed MarketDNA (DNA_t-1) + Current Basic Context / Eventを使い、現Cycleで何を見る価値が高いか決める
 ```
+
+Cycle Boundary:
+
+```text
+DNA_(t-1)
+→ FeaturePriority_t
+→ MarketIntelligence_t
+→ Causal_t
+→ DNA_t
+→ 次Cycle
+```
+
+`DNA_t → FeaturePriority_t` の同一Cycle逆流は禁止する。
 
 ## Research vs Production
 
