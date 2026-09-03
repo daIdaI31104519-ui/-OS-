@@ -1,0 +1,3433 @@
+# OBJECT_DICTIONARY.md
+
+# 市場理解OS 情報Object辞書・完全設計
+
+## 0. 文書情報
+
+- 文書種別: DICTIONARY / OBJECT SOURCE OF TRUTH
+- 状態: CANONICAL DICTIONARY CANDIDATE
+- 上位ルール:
+  - `00_GOVERNANCE/GIT_RULES.md`
+  - `00_GOVERNANCE/DESIGN_CHANGE_RULES.md`
+- 関連辞書:
+  - `01_DICTIONARY/ROLE_DICTIONARY.md`
+- 対象: 市場理解OS内で生成・保存・受け渡し・研究・本番利用される情報Object
+- 目的: Objectの意味・Owner・生成元・必須情報・Version・Trace・不変条件・保存方針を統一し、同じ意味のデータを別名・別形式で無秩序に増殖させない
+- 最上位原則: **Objectは「情報の意味」を表し、Role / Contract / View / Experiment Modeと混同しない**
+
+---
+
+# 1. Object Dictionaryの目的
+
+市場理解OSを何十年以上運用する場合、コードより長く残るのは研究結果・市場Case・Hypothesis・Failure・Trade履歴等のKnowledgeである。
+
+そのためObjectは、その時点のPython class名だけではなく、将来別言語・別DB・別Providerへ移行しても意味を失わない論理定義として管理する。
+
+本書で解決すること:
+
+1. Objectが何を意味するか
+2. どのRoleが生成・所有するか
+3. どのObjectを入力として作られたか
+4. どのVersion / Formula / Schemaで生成されたか
+5. Raw Evidenceまで遡れるか
+6. Objectが変更可能か、Snapshotとして固定されるか
+7. Research / Demo / Liveの証拠を混ぜない
+8. Knowledgeを重複コピーせず再利用する
+9. 数年後・数十年後もMigration可能にする
+10. 後続のData Contract / DB Schema / Python Modelの基準を作る
+
+---
+
+# 2. Role / Object / Contract / View / Modeの境界
+
+## Role
+
+処理・判断・管理を行う責任主体。
+
+例:
+
+```text
+Collector
+Market Intelligence
+Causal Engine
+Research Orchestrator
+Signal Engine
+Runtime
+```
+
+## Object
+
+Roleが生成・保存・受け渡す情報構造。
+
+例:
+
+```text
+RawData
+Feature
+Evidence
+CausalHypothesis
+MarketDNA
+ResearchResult
+TradeThesis
+OrderIntent
+TradeResult
+```
+
+## Contract
+
+ObjectをRole間でどう受け渡すかを定義する規則。
+
+例:
+
+```text
+Data Contract
+Processing Contract
+Error Contract
+Research Contract
+Trade Thesis Contract
+```
+
+## View
+
+同じKnowledge Object群を別の目的から参照する方法。
+
+例:
+
+```text
+Case Library
+Market Memory
+Failure Museum
+Knowledge Graph
+```
+
+## Experiment Mode
+
+Research Trialの実験方式。
+
+例:
+
+```text
+RANDOM_BASELINE
+HISTORICAL
+REPLAY
+PAPER
+DEMO_FORWARD
+SHADOW
+COUNTERFACTUAL
+```
+
+重要:
+
+> ViewやModeのために同じObjectをコピーして別DBへ重複保存しない。
+
+---
+
+# 3. Object分類
+
+市場理解OSのObjectを大きく次へ分類する。
+
+```text
+A. COMMON / CONTROL OBJECTS
+B. OBSERVATION / DATA OBJECTS
+C. MEASUREMENT / FEATURE OBJECTS
+D. MARKET UNDERSTANDING OBJECTS
+E. CAUSAL / DNA OBJECTS
+F. RESEARCH OBJECTS
+G. KNOWLEDGE OBJECTS
+H. PRODUCTION / TRADING OBJECTS
+I. POST-TRADE / FEEDBACK OBJECTS
+J. PLATFORM / OPERATIONS OBJECTS
+```
+
+---
+
+# 4. 全Persistent Object共通Metadata
+
+DB等へ永続保存する主要Objectは、原則として次を持つ。
+
+```yaml
+object_id:              # Objectを一意に識別
+object_type:            # RawData / Evidence / TradeThesis 等
+schema_version:         # Data SchemaのVersion
+object_version:         # 同一論理ObjectのVersion
+created_at:             # 生成日時 UTC基準
+updated_at:             # 変更可能Objectのみ
+valid_from:             # 有効開始時刻がある場合
+valid_until:            # 有効期限がある場合
+status:                 # Lifecycleを持つ場合
+market_profile_id:      # BTCUSDT等の対象Profile
+trace_id:               # OS内部処理系列
+parent_object_ids: []   # 直接生成元Object
+source_refs: []         # 外部Source / Raw参照
+provenance:             # 生成経路
+quality_ref:            # Data Quality参照
+uncertainty:            # 不確実性
+created_by_role:        # 生成Role
+code_version:           # 再現性が必要な場合
+config_version:         # 再現性が必要な場合
+```
+
+全Objectへ無条件ですべてを複製するのではなく、Objectの性質に応じて必須 / 任意をContractで定義する。
+
+---
+
+# 5. IDとTraceの共通原則
+
+最低限、次を混同しない。
+
+```text
+Object ID
+= 一つの情報Objectを識別
+
+Trace ID
+= OS内部の処理系列を追跡
+
+Market Event ID
+= 実市場で起きた現象を識別
+
+Trial ID
+= 研究試行を識別
+
+Trade ID
+= 実取引または取引結果を識別
+
+Trade Thesis ID
+= 取引論拠を識別
+
+Hypothesis ID
+= 研究仮説を識別
+```
+
+同じMarket Eventを複数Hypothesisで研究しても、Unique Market Event数を水増ししない。
+
+---
+
+# 6. Object Version原則
+
+## Immutable Snapshot型
+
+生成後に原則変更しない。
+
+例:
+
+```text
+RawData
+MarketEvent
+FeatureResult
+ResearchTrialResult
+EntryThesis
+OrderIntent
+TradeResult
+ProductionEvidence
+```
+
+修正が必要な場合は元Objectを上書きせず、新Version / Correction Object / Superseded関係を使う。
+
+## Versioned Mutable Knowledge型
+
+研究進行により状態が変わる。
+
+例:
+
+```text
+CausalHypothesis
+MarketDNA definition
+FeatureKnowledge
+FormulaKnowledge
+Constraint
+```
+
+変更履歴を失わない。
+
+## Ephemeral型
+
+Runtime内部の一時状態として扱え、永続保存を必須としない。
+
+例:
+
+```text
+短期Cache
+一時Queue Item
+Transient Health Probe
+```
+
+ただしFailure分析に必要なものはAudit / Diagnosticsへ保存する。
+
+---
+
+# A. COMMON / CONTROL OBJECTS
+
+# OBJ-COM-001: MarketProfile
+
+## Meaning
+
+一つの市場・Instrumentを、Coreを書き換えず切り替えるための論理設定Object。
+
+## Owner
+
+Outer Control / Configuration
+
+## Main Fields
+
+```yaml
+market_profile_id:
+asset_class:
+base_asset:
+quote_asset:
+symbol:
+venue_type:
+exchange_or_provider:
+timezone:
+price_precision:
+quantity_precision:
+minimum_order_size:
+market_specific_rules:
+data_sources: []
+execution_enabled:
+profile_version:
+```
+
+## Invariants
+
+- 市場理解ロジックをProfileへ埋め込まない
+- API Key等Secretを保存しない
+- BTC / ETH / SOL等の差は可能な限りProfile / Adapterで吸収する
+
+---
+
+# OBJ-COM-002: SourceMetadata
+
+## Meaning
+
+外部データが「どこから、いつ、どの状態で取得されたか」を示すProvenance Object / Value Object。
+
+## Owner
+
+Collector / Source Adapter
+
+## Main Fields
+
+```yaml
+source_id:
+provider:
+endpoint_or_stream:
+requested_at:
+received_at:
+source_timestamp:
+latency_ms:
+status:
+schema_version:
+raw_hash:
+request_id:
+```
+
+## Invariants
+
+Source情報を下流で失わない。
+
+---
+
+# OBJ-COM-003: QualityProfile
+
+## Meaning
+
+入力情報をどこまで信用できるかを示す品質Object。
+
+## Owner
+
+Data Quality
+
+## Main Fields
+
+```yaml
+quality_status:
+quality_profile_version:
+issues: []
+missing_ratio:
+duplicate_state:
+latency_state:
+freshness:
+outlier_state:
+timestamp_drift:
+cross_source_consistency:
+source_health:
+confidence_limit:
+```
+
+## Invariants
+
+- `PASS / FAIL`だけに圧縮しない
+- Quality低下を下流でHigh Confidenceへ勝手に戻さない
+- Quality Scoreを万能な謎スコアとして扱わない
+
+---
+
+# OBJ-COM-004: Diagnostics
+
+## Meaning
+
+正常結果とは別に、変換・計算・実行中に起きた警告・補正・異常を保持する補助Object。
+
+## Owner
+
+各Role
+
+## Main Fields
+
+```yaml
+diagnostic_id:
+severity:
+category:
+message_code:
+details:
+related_object_ids: []
+created_at:
+recoverable:
+```
+
+## Invariants
+
+Primary ResultとDiagnosticsを混同しない。
+
+---
+
+# A-2. CONTROL / POLICY OBJECTS
+
+# OBJ-CTL-001: RuntimeCommand
+
+## Meaning
+
+Outer / Human InterfaceからRuntimeへ渡すDesired State変更要求。
+
+## Owner
+
+Outer Control
+
+## Main Fields
+
+```yaml
+command_id:
+command_type: START | PAUSE | RESUME | STOP | STATUS | SAFE_SHUTDOWN
+market_profile_id:
+requested_by:
+requested_at:
+reason:
+confirmation_level:
+```
+
+## Invariants
+
+Command自体がProcessを直接操作しない。Runtimeが検証・実行する。
+
+---
+
+# OBJ-CTL-002: GlobalRiskLimit
+
+## Meaning
+
+市場・口座・Portfolio全体で許可するRisk上限のPolicy Object。
+
+## Owner
+
+Risk Governance / Outer Control
+
+## Main Fields
+
+```yaml
+risk_policy_id:
+max_exposure:
+max_position_size:
+max_drawdown_policy:
+max_consecutive_loss_policy:
+max_open_positions:
+kill_switch_condition:
+effective_from:
+policy_version:
+```
+
+## Invariants
+
+Signalが上限を書き換えない。
+
+---
+
+# B. OBSERVATION / DATA OBJECTS
+
+# OBJ-DATA-001: RawData
+
+## Meaning
+
+外部Sourceから取得した加工前の一次証拠。
+
+## Owner
+
+Collector
+
+## Main Fields
+
+```yaml
+raw_data_id:
+source_metadata:
+market_profile_id:
+payload:
+source_timestamp:
+received_at:
+raw_hash:
+schema_version:
+```
+
+## Invariants
+
+- 原本を上書きしない
+- Featureで置換しない
+- Source / Timestampを失わない
+- 後から再計算できる形を優先する
+
+## Retention
+
+長期保存方針はStorage Lifecycleで定義する。`Rawを残す原則` と `Storageは有限` をRetention / Compression / Archiveで両立させる。
+
+---
+
+# OBJ-DATA-002: Observation
+
+## Meaning
+
+Raw Dataを研究可能な単一観測単位へ構造化したObject。
+
+## Owner
+
+Normalizer / Observation Processing
+
+## Example
+
+```text
+open_interest = 12.4B at T
+```
+
+## Main Fields
+
+```yaml
+observation_id:
+metric_or_field:
+value:
+unit:
+observed_at:
+market_profile_id:
+raw_data_refs: []
+normalization_version:
+quality_ref:
+trace_id:
+```
+
+## Invariants
+
+Observationは「起きた現象の解釈」ではなく観測値。
+
+---
+
+# OBJ-DATA-003: MarketEvent
+
+## Meaning
+
+市場で発生した一つの現象を識別するObject。
+
+## Owner
+
+Market Intelligence / Event Detection
+
+## Example
+
+```text
+OI increased rapidly
+ETF flow shock
+Liquidity collapse
+```
+
+## Main Fields
+
+```yaml
+market_event_id:
+event_type:
+start_at:
+end_at:
+market_profile_id:
+observation_refs: []
+feature_refs: []
+event_magnitude:
+quality_ref:
+confidence:
+trace_refs: []
+```
+
+## Invariants
+
+- Trace IDと分離する
+- 同じ実市場Eventを複数Trialで別Eventとして水増ししない
+- 後からEvent同定ルールが変わる場合はVersionを残す
+
+---
+
+# OBJ-DATA-004: NormalizedObservation
+
+## Meaning
+
+Timestamp / Unit / Symbol等が標準化されたObservation。
+
+## Owner
+
+Normalizer
+
+## Main Fields
+
+```yaml
+normalized_observation_id:
+source_observation_id:
+standard_symbol:
+standard_timestamp:
+standard_value:
+standard_unit:
+conversion_history: []
+normalizer_version:
+diagnostics_ref:
+```
+
+## Invariants
+
+NormalizationでRaw Evidenceを失わない。
+
+---
+
+# OBJ-DATA-005: TimeSeriesMeasurement
+
+## Meaning
+
+観測値を時間変化として扱うための系列測定Object。
+
+## Owner
+
+Time Series Processor
+
+## Main Fields
+
+```yaml
+measurement_id:
+metric_id:
+value:
+sampling_interval:
+measurement_window:
+lookback:
+valid_until:
+input_refs: []
+quality_ref:
+formula_version:
+```
+
+## Examples
+
+```text
+Delta
+Return
+Velocity
+Acceleration
+Persistence
+Percentile
+Volatility
+Lagged Value
+```
+
+## Invariants
+
+異なる時間窓を暗黙に混ぜない。
+
+---
+
+# C. MEASUREMENT / FEATURE OBJECTS
+
+# OBJ-CALC-001: FormulaDefinition
+
+## Meaning
+
+正式な計算方法をVersion付きで表すDefinition Object。
+
+## Owner
+
+Calculation / Measurement Service
+
+## Main Fields
+
+```yaml
+formula_id:
+formula_version:
+name:
+expression_or_algorithm_ref:
+input_definition: []
+output_definition:
+unit_rule:
+time_window_rule:
+assumptions: []
+status:
+validated_evidence_refs: []
+created_at:
+deprecated_at:
+```
+
+## Invariants
+
+- Formulaを上書きして過去再現性を失わない
+- 数学的正しさと市場的妥当性を分ける
+- Production利用FormulaはResearch履歴を参照可能にする
+
+---
+
+# OBJ-CALC-002: MeasurementResult
+
+## Meaning
+
+FormulaDefinitionを特定入力へ適用した計算結果。
+
+## Owner
+
+Calculation / Measurement Service
+
+## Main Fields
+
+```yaml
+measurement_result_id:
+formula_id:
+formula_version:
+value:
+unit:
+input_refs: []
+time_window:
+quality_ref:
+created_at:
+trace_id:
+```
+
+## Invariants
+
+FormulaDefinitionと結果を分ける。
+
+---
+
+# OBJ-FEAT-001: Feature
+
+## Meaning
+
+市場理解・研究に利用できるVersioned Feature値。
+
+## Owner
+
+Feature Generator
+
+## Main Fields
+
+```yaml
+feature_id:
+feature_definition_id:
+feature_version:
+value:
+unit:
+formula_id:
+formula_version:
+input_refs: []
+time_window:
+quality_ref:
+confidence:
+created_at:
+valid_until:
+trace_id:
+```
+
+## Invariants
+
+- BUY / SELL意味をFeature自体へ埋め込まない
+- Raw DataまでTrace可能にする
+- Formula Versionを必須参照とする
+
+---
+
+# OBJ-FEAT-002: FeaturePriorityProfile
+
+## Meaning
+
+現在条件で各Featureをどの程度注目する価値があるかを表す優先度Object。
+
+## Owner
+
+Feature Priority
+
+## Main Fields
+
+```yaml
+priority_profile_id:
+market_profile_id:
+context_ref:
+dna_reference:
+horizon:
+selected_features: []
+low_priority_features: []
+priority_reasons: []
+redundancy_map:
+quality_constraints:
+priority_version:
+valid_until:
+```
+
+## Invariants
+
+- Priority = Confidenceではない
+- Low Priority = Raw取得停止ではない
+- Safety Sentinel FeatureはPriority低下だけで観測停止しない
+- Market DNA参照の時系列関係は後続Architecture Contractで循環を起こさないよう固定する
+
+---
+
+# D. MARKET UNDERSTANDING OBJECTS
+
+# OBJ-MI-001: MarketContext
+
+## Meaning
+
+Market Intelligenceが「今、市場で何が起きているか」を構造化したContext Object。
+
+## Owner
+
+Market Intelligence
+
+## Main Fields
+
+```yaml
+market_context_id:
+market_profile_id:
+as_of:
+horizon:
+price_structure:
+volatility_context:
+liquidity_context:
+derivatives_context:
+participant_flow_context:
+institutional_context:
+macro_context:
+news_event_context:
+cross_market_context:
+market_event_refs: []
+evidence_refs: []
+quality_ref:
+uncertainty:
+context_version:
+```
+
+## Invariants
+
+Cause確定・BUY / SELLを含めない。
+
+---
+
+# OBJ-MI-002: Evidence
+
+## Meaning
+
+仮説・市場解釈・研究判断を支持または反証する追跡可能な証拠Object。
+
+## Owner
+
+Market Intelligence / Research
+
+## Main Fields
+
+```yaml
+evidence_id:
+evidence_type:
+direction: SUPPORT | CONTRADICT | NEUTRAL
+claim_scope:
+source_object_refs: []
+market_event_refs: []
+time_scope:
+quality_ref:
+strength_profile:
+uncertainty:
+evidence_source_channel:
+created_at:
+```
+
+## Invariants
+
+- Evidence Source Channelを保持する
+-同じ証拠を複数Hypothesisで共有する場合 `shared_evidence` として追跡する
+- Evidenceの数をそのまま強さとみなさない
+
+---
+
+# OBJ-MI-003: Contradiction
+
+## Meaning
+
+現在の説明・Hypothesis・Trade Thesisを弱める反証材料を明示するObject。
+
+## Owner
+
+Market Intelligence / Causal Engine / Research
+
+## Main Fields
+
+```yaml
+contradiction_id:
+target_object_id:
+evidence_refs: []
+severity: SOFT | HARD | UNCLASSIFIED
+mechanism:
+observed_at:
+quality_ref:
+uncertainty:
+```
+
+## Invariants
+
+Contradictionを削除して都合の良いEvidenceだけ残さない。
+
+`SOFT / HARD` のProduction Gateへの正式影響は後続Contractで確定する。
+
+---
+
+# OBJ-MI-004: UnexplainedEvent
+
+## Meaning
+
+重要な市場現象だが、現在のKnowledgeでは十分説明できないことを明示する研究資産。
+
+## Owner
+
+Market Intelligence
+
+## Main Fields
+
+```yaml
+unexplained_event_id:
+market_event_refs: []
+observed_context_ref:
+known_explanations_checked: []
+why_unexplained:
+priority_candidate:
+research_candidate_ref:
+```
+
+## Invariants
+
+説明不能時に物語を捏造しない。
+
+---
+
+# E. CAUSAL / DNA OBJECTS
+
+# OBJ-CAUSAL-001: CauseCandidate
+
+## Meaning
+
+あるEffectを生じさせた可能性がある、未検証の原因候補。
+
+## Owner
+
+Causal Engine
+
+## Main Fields
+
+```yaml
+cause_candidate_id:
+target_effect_id:
+candidate_factor:
+supporting_evidence_refs: []
+contradicting_evidence_refs: []
+temporal_order_state:
+lag_candidate:
+confounder_candidates: []
+alternative_hypothesis_refs: []
+quality_ref:
+uncertainty:
+status:
+```
+
+## Invariants
+
+- Cause CandidateはCauseではない
+- 相関だけで原因確定しない
+- Effectより後の事象を無条件でCause化しない
+
+---
+
+# OBJ-CAUSAL-002: EffectDefinition
+
+## Meaning
+
+Causal Researchで説明・検証対象とする結果側の現象定義。
+
+## Owner
+
+Causal Engine
+
+## Main Fields
+
+```yaml
+effect_id:
+effect_type:
+target_metric_or_event:
+direction:
+magnitude_rule:
+horizon:
+measurement_formula_ref:
+market_event_refs: []
+```
+
+## Invariants
+
+Effect定義を後から都合よく変更して過去Trialを再解釈しない。変更時はVersionを分ける。
+
+---
+
+# OBJ-CAUSAL-003: CausalHypothesis
+
+## Meaning
+
+Cause Candidate / Effect / Mechanism / 反証条件を統合した検証可能な仮説Object。
+
+## Owner
+
+Causal Engine / Knowledge Domain
+
+## Main Fields
+
+```yaml
+hypothesis_id:
+hypothesis_version:
+status:
+cause_candidate_refs: []
+effect_ref:
+mechanism:
+expected_direction:
+expected_horizon:
+lag_definition:
+confounder_refs: []
+alternative_hypothesis_refs: []
+supporting_evidence_refs: []
+contradicting_evidence_refs: []
+assessment_profile_ref:
+applicability_ref:
+market_dna_scope:
+research_result_refs: []
+created_at:
+last_validated_at:
+revalidation_due_at:
+```
+
+## Candidate Lifecycle
+
+```text
+DRAFT
+→ TESTING / RESEARCHING
+→ SUPPORTED
+→ APPROVED
+→ ACTIVE
+→ AGING / WEAK / SUSPENDED
+→ RETIRED
+↘ REOPENED
+```
+
+最終State集合は `STATE_DICTIONARY.md` で確定する。
+
+## Invariants
+
+- 1回当たっただけでSUPPORTEDにしない
+- 1回外れただけでRetireしない
+- Historical / OOS / Demo / Liveを混ぜない
+- Alternative / Contradictionを保持する
+
+---
+
+# OBJ-CAUSAL-004: HypothesisAssessmentProfile
+
+## Meaning
+
+Hypothesisの健全性を単一Mystery Scoreへ潰さず、多次元で評価するObject。
+
+## Owner
+
+Causal Engine / Research / Post-Trade
+
+## Candidate Dimensions
+
+```yaml
+temporal_support:
+contradiction_strength:
+confounder_risk:
+historical_support:
+oos_support:
+demo_forward_support:
+regime_stability:
+live_evidence:
+staleness:
+uncertainty:
+unique_event_count:
+```
+
+## Invariants
+
+単一Composite ScoreだけでLifecycleやTrade可否を決定しない。
+
+表示用Scoreを将来持つ場合でも、元Dimensionを保存する。
+
+---
+
+# OBJ-DNA-001: MarketDNA
+
+## Meaning
+
+現在または過去の市場状態を比較・検索・研究できる正規化された圧縮表現。
+
+## Owner
+
+Market DNA Role / Knowledge Domain
+
+## Candidate Axes
+
+```yaml
+trend:
+volatility:
+liquidity:
+leverage:
+derivatives:
+participant_flow:
+whale:
+etf_institution:
+macro_linkage:
+time_session:
+news_event_context:
+cross_market_correlation:
+```
+
+## Main Fields
+
+```yaml
+market_dna_id:
+dna_definition_version:
+market_profile_id:
+as_of:
+horizon:
+axis_values:
+axis_quality:
+input_feature_refs: []
+formula_refs: []
+nearest_case_refs: []
+nearest_similarity:
+novelty_profile:
+quality_ref:
+uncertainty:
+```
+
+## Invariants
+
+- AIの説明不能なMystery Scoreにしない
+- 各軸からRaw / Feature / Formulaまで遡れる
+- Market DNA = 市場状態
+- Feature Priority = 何を見る価値が高いか
+- Signalを直接生成しない
+
+---
+
+# OBJ-DNA-002: RegimeProfile
+
+## Meaning
+
+Market DNA / 市場状態を、ProductionやResearchで扱いやすい粗い分類へ写像する派生Object候補。
+
+## Owner
+
+Market DNA / Research
+
+## Example
+
+```text
+BULL
+BEAR
+RANGE
+HIGH_VOL
+LOW_LIQUIDITY
+```
+
+## Main Fields
+
+```yaml
+regime_profile_id:
+market_dna_ref:
+regime_labels: []
+classification_rule_version:
+confidence:
+valid_until:
+```
+
+## Invariants
+
+独立した第二の市場状態体系としてMarket DNAと競合させない。
+
+RegimeとDNAの正式関係はArchitecture Canonical化時に最終固定する。
+
+---
+
+# F. RESEARCH OBJECTS
+
+# OBJ-RSCH-001: ResearchCandidate
+
+## Meaning
+
+Researchへ送るべき未検証課題・疑問・異常・仮説候補を統一して表す入口Object。
+
+## Owner
+
+Research Router / Research Orchestrator
+
+## Candidate Sources
+
+```text
+Causal Hypothesis
+Alternative Hypothesis
+Contradiction
+Feature Candidate
+Formula Candidate
+Market DNA Candidate
+Unexplained Event
+Novel Regime
+Unexpected Failure
+Unexpected Success
+Missed Opportunity
+Defense Block
+Supervisor Warning
+Execution Anomaly
+Data Quality Anomaly
+Demo vs Live Divergence
+AI Review New Idea
+```
+
+## Main Fields
+
+```yaml
+research_candidate_id:
+candidate_type:
+origin_role:
+origin_object_refs: []
+question:
+expected_value_of_research:
+urgency:
+risk_relevance:
+data_availability:
+duplicate_candidate_refs: []
+status:
+created_at:
+expiry_or_revisit_at:
+```
+
+## Invariants
+
+Research CandidateをそのままProductionへ利用しない。
+
+---
+
+# OBJ-RSCH-002: ResearchPlan
+
+## Meaning
+
+何を、どのEvidence Channel・Dataset・評価基準で検証するかを事前定義する研究計画Object。
+
+## Owner
+
+Research Orchestrator
+
+## Main Fields
+
+```yaml
+research_plan_id:
+research_candidate_ref:
+target_object_refs: []
+research_question:
+hypothesis_or_claim:
+experiment_modes: []
+pre_registered_metrics: []
+entry_criteria:
+continue_criteria:
+early_stop_criteria:
+completion_criteria:
+data_scope:
+holdout_policy:
+resource_budget_ref:
+plan_version:
+frozen_at:
+```
+
+## Invariants
+
+結果を見てから評価基準を都合よく書き換えない。変更時はPlan Versionを分ける。
+
+---
+
+# OBJ-RSCH-003: ResearchTrial
+
+## Meaning
+
+ResearchPlanに基づいて実行される一つの試行。
+
+## Owner
+
+Experimental Framework
+
+## Main Fields
+
+```yaml
+trial_id:
+research_plan_id:
+experiment_mode:
+evidence_source_channel:
+t0:
+dataset_or_event_scope:
+unique_market_event_refs: []
+model_formula_feature_versions:
+execution_model_version:
+started_at:
+finished_at:
+status:
+```
+
+## Invariants
+
+- Demo ForwardではT0以降だけを評価する
+- Rule変更時は同じTrialを上書きせず新Version / T0を作る
+- Trial数とUnique Market Event数を分離する
+
+---
+
+# OBJ-RSCH-004: ResearchResult
+
+## Meaning
+
+Research Trialで観測された結果を、結論とDiagnosticsを分けて保存するObject。
+
+## Owner
+
+Research / Validation Framework
+
+## Main Fields
+
+```yaml
+research_result_id:
+trial_id:
+primary_result:
+metrics:
+diagnostics:
+quality_ref:
+uncertainty:
+evidence_source_channel:
+unique_event_count:
+limitations: []
+contradictions: []
+produced_candidate_refs: []
+created_at:
+```
+
+## Invariants
+
+失敗結果も保存する。
+
+---
+
+# OBJ-RSCH-005: EvidencePackage
+
+## Meaning
+
+Hypothesis / Edge / Formula等をApproval判断へ送る際、複数Research EvidenceをSource別に束ねるPackage。
+
+## Owner
+
+Validation / Knowledge Promotion
+
+## Main Fields
+
+```yaml
+evidence_package_id:
+target_object_id:
+historical_result_refs: []
+oos_result_refs: []
+regime_result_refs: []
+demo_forward_result_refs: []
+stress_result_refs: []
+live_evidence_refs: []
+contradiction_refs: []
+limitations: []
+assessment_profile:
+created_at:
+```
+
+## Invariants
+
+Historical 4200 + Demo 420 + Live 28を単純4648件として扱わない。
+
+---
+
+# OBJ-RSCH-006: ApplicabilityProfile
+
+## Meaning
+
+あるHypothesis / Edge / Formulaが「どの条件で利用可能か」を表すObject。
+
+## Owner
+
+Research / Knowledge Domain
+
+## Main Fields
+
+```yaml
+applicability_id:
+target_object_id:
+market_profiles: []
+market_dna_conditions:
+regime_conditions:
+time_conditions:
+horizon_conditions:
+quality_requirements:
+constraint_refs: []
+known_exclusions: []
+last_validated_at:
+```
+
+## Invariants
+
+「有効 / 無効」だけでなく条件付き適用性を保持する。
+
+---
+
+# OBJ-RSCH-007: Edge
+
+## Meaning
+
+Researchで再現可能性・期待値・適用条件が確認された利用可能な優位性Object。
+
+## Owner
+
+Research / Knowledge Promotion
+
+## Types
+
+```text
+CAUSAL_EDGE
+EMPIRICAL_EDGE
+```
+
+## Main Fields
+
+```yaml
+edge_id:
+edge_type:
+source_hypothesis_refs: []
+mechanism_or_pattern:
+expected_effect:
+expected_horizon:
+expected_value_profile:
+applicability_ref:
+evidence_package_ref:
+constraint_refs: []
+status:
+last_validated_at:
+```
+
+## Invariants
+
+因果説明が強い = EVが正とは限らない。
+Empirical EdgeもOOS / Demo等の再現性を要求する。
+
+---
+
+# OBJ-RSCH-008: ResearchBudget
+
+## Meaning
+
+ResearchがCPU / RAM / Storage / Trial / 時間を無限消費しないためのResource Policy Object。
+
+## Owner
+
+Research Governance
+
+## Main Fields
+
+```yaml
+research_budget_id:
+max_concurrent_trials:
+max_trial_count:
+max_cpu_budget:
+max_memory_budget:
+max_storage_budget:
+max_runtime:
+max_hypothesis_set_size:
+max_combination_count:
+priority_policy_version:
+```
+
+## Invariants
+
+Researchの価値と計算資源を別々に無限化しない。
+
+---
+
+# G. KNOWLEDGE OBJECTS
+
+# OBJ-KNW-001: MarketCase
+
+## Meaning
+
+再利用可能な一つの過去市場Case。
+
+## Owner
+
+Knowledge Domain
+
+## Main Fields
+
+```yaml
+market_case_id:
+market_profile_id:
+start_at:
+end_at:
+market_dna_ref:
+market_context_refs: []
+market_event_refs: []
+key_evidence_refs: []
+research_result_refs: []
+trade_result_refs: []
+outcome_summary:
+case_tags: []
+```
+
+## Invariants
+
+Case LibraryはこのObjectへのViewであり、別コピーを作らない。
+
+---
+
+# OBJ-KNW-002: FeatureKnowledge
+
+## Meaning
+
+Featureがどの条件・Horizon・DNAで有効 / 無効 / 不安定だったかという再利用可能Knowledge。
+
+## Owner
+
+Knowledge Domain
+
+## Main Fields
+
+```yaml
+feature_knowledge_id:
+feature_definition_ref:
+applicability_ref:
+research_result_refs: []
+known_strengths: []
+known_failures: []
+redundancy_relations: []
+last_validated_at:
+status:
+```
+
+---
+
+# OBJ-KNW-003: FormulaKnowledge
+
+## Meaning
+
+Formula Versionごとの市場的妥当性・安定性・Failureを保存するKnowledge。
+
+## Owner
+
+Knowledge Domain
+
+## Main Fields
+
+```yaml
+formula_knowledge_id:
+formula_ref:
+research_result_refs: []
+sensitivity_profile:
+regime_profile:
+stress_profile:
+demo_forward_profile:
+known_failures: []
+status:
+last_validated_at:
+```
+
+---
+
+# OBJ-KNW-004: Failure
+
+## Meaning
+
+市場理解・研究・Production・Execution・Platformで発生した失敗を再利用可能なKnowledgeとして保存するObject。
+
+## Owner
+
+Knowledge Domain / Post-Trade / Operations
+
+## Main Fields
+
+```yaml
+failure_id:
+failure_type:
+origin_domain:
+related_object_refs: []
+conditions:
+observed_effect:
+root_cause_state:
+known_root_causes: []
+unknowns: []
+severity:
+reproduction_refs: []
+created_at:
+```
+
+## Invariants
+
+単なるError Logで終わらせない。重要FailureはBoundary / Constraint / Recovery Knowledgeへ昇格可能にする。
+
+---
+
+# OBJ-KNW-005: StressResult
+
+## Meaning
+
+Stress / Validation実験で実際に何が起きたかを保存する実験結果Object。
+
+## Owner
+
+Validation Framework
+
+## Main Fields
+
+```yaml
+stress_result_id:
+target_object_id:
+stress_scenario:
+input_conditions:
+observed_result:
+failure_detected:
+metrics:
+trial_ref:
+```
+
+---
+
+# OBJ-KNW-006: FailureBoundary
+
+## Meaning
+
+どの条件を境にHypothesis / Edge / Systemが成立しなくなるかを表す境界Object。
+
+## Owner
+
+Research / Knowledge Domain
+
+## Main Fields
+
+```yaml
+failure_boundary_id:
+target_object_id:
+boundary_variables:
+safe_region:
+weak_region:
+unsafe_region:
+unknown_region:
+supporting_stress_results: []
+uncertainty:
+```
+
+## Invariants
+
+Boundaryが未知ならUNKNOWNを明示する。
+
+---
+
+# OBJ-KNW-007: Constraint
+
+## Meaning
+
+Researchで得たFailureBoundary等をProductionの適用・禁止・修正条件へ変換したSafety Knowledge。
+
+## Owner
+
+Knowledge Promotion / Risk Governance
+
+## Candidate Types
+
+```text
+REQUIRE
+EXCLUDE
+MODIFY
+ALLOW
+```
+
+## Main Fields
+
+```yaml
+constraint_id:
+target_scope:
+constraint_type:
+condition:
+action_or_effect:
+source_failure_boundary_refs: []
+evidence_package_ref:
+status:
+effective_from:
+review_due_at:
+```
+
+## Invariants
+
+ConstraintはBUY / SELL方向を生成しない。
+
+---
+
+# OBJ-KNW-008: NegativeKnowledge
+
+## Meaning
+
+効果がない・再現しない・採用しないこと自体を保存するKnowledge。
+
+## Owner
+
+Knowledge Domain
+
+## Main Fields
+
+```yaml
+negative_knowledge_id:
+target_object_refs: []
+claim:
+tested_conditions:
+research_result_refs: []
+reason:
+reopen_condition:
+created_at:
+last_reviewed_at:
+```
+
+## Invariants
+
+同じ無駄研究を繰り返さない。ただし構造変化時のReopen条件を持てる。
+
+---
+
+# OBJ-KNW-009: KnowledgeRelationship
+
+## Meaning
+
+Knowledge Object同士の関係を一元的に表すGraph Edge Object。
+
+## Owner
+
+Knowledge Domain
+
+## Example Types
+
+```text
+SUPPORTS
+CONTRADICTS
+DEPENDS_ON
+DERIVED_FROM
+APPLIES_TO
+FAILS_UNDER
+SUPERSEDES
+DUPLICATES
+RELATED_TO
+```
+
+## Main Fields
+
+```yaml
+relationship_id:
+source_object_id:
+relationship_type:
+target_object_id:
+evidence_refs: []
+confidence:
+valid_from:
+valid_until:
+```
+
+## Invariants
+
+Knowledge GraphはRelationshipを表示するViewであり、別Knowledgeを複製しない。
+
+---
+
+# OBJ-KNW-010: KnowledgeLifecycleProfile
+
+## Meaning
+
+Knowledgeの年齢・劣化・再検証必要性を管理する長期運用Object。
+
+## Owner
+
+Knowledge Aging Governance
+
+## Main Fields
+
+```yaml
+knowledge_lifecycle_id:
+target_object_id:
+created_at:
+last_validated_at:
+last_demo_pass_at:
+last_live_evidence_at:
+revalidation_due_at:
+staleness_state:
+edge_health_state:
+current_risk_stage:
+reopen_or_suspend_reason:
+```
+
+## Invariants
+
+一度SUPPORTED / APPROVEDになったKnowledgeを永久真理として扱わない。
+
+---
+
+# H. PRODUCTION / TRADING OBJECTS
+
+# OBJ-PRD-001: HypothesisPoolEntry
+
+## Meaning
+
+Productionが参照可能なHypothesis / Edgeの登録状態を表すEntry Object。
+
+## Owner
+
+Knowledge Promotion / Production
+
+## Main Fields
+
+```yaml
+pool_entry_id:
+hypothesis_or_edge_ref:
+production_status:
+applicability_ref:
+constraint_refs: []
+assessment_profile_ref:
+evidence_package_ref:
+allowed_risk_stage:
+expires_or_review_due_at:
+```
+
+## Candidate Status
+
+```text
+CANDIDATE
+RESEARCHING
+DEMO_FORWARD
+SUPPORTED
+WEAK
+HOLD
+RETIRED
+APPROVED_FOR_PRODUCTION
+```
+
+Productionは未承認Entryを自由に有効化しない。
+
+---
+
+# OBJ-PRD-002: ApplicableHypothesisSet
+
+## Meaning
+
+現在市場に適用可能なApproved Hypothesis / Edgeを役割付きで束ねたObject。
+
+## Owner
+
+Production / Hypothesis Selection
+
+## Roles
+
+```text
+PRIMARY
+SUPPORTING
+CONDITIONAL
+CONTRADICTING
+```
+
+## Main Fields
+
+```yaml
+hypothesis_set_id:
+hypothesis_set_version:
+market_context_ref:
+market_dna_ref:
+horizon:
+primary_hypothesis_refs: []
+supporting_hypothesis_refs: []
+conditional_hypothesis_refs: []
+contradicting_hypothesis_refs: []
+shared_evidence_map:
+dependency_map:
+redundancy_map:
+common_cause_map:
+constraint_refs: []
+quality_ref:
+uncertainty:
+created_at:
+valid_until:
+```
+
+## Invariants
+
+仮説数の多数決でDirectionを決めない。
+
+---
+
+# OBJ-PRD-003: TradeThesis
+
+## Meaning
+
+Applicable Hypothesis Setを、現在市場でRiskを取るか判断可能な一つの取引論拠へまとめたObject。
+
+## Owner
+
+Production
+
+## Main Fields
+
+```yaml
+trade_thesis_id:
+trade_thesis_version:
+market_profile_id:
+market_context_ref:
+market_dna_ref:
+hypothesis_set_ref:
+expected_direction:
+expected_effect:
+expected_horizon:
+expected_value_profile:
+primary_hypothesis_refs: []
+supporting_hypothesis_refs: []
+conditional_hypothesis_refs: []
+contradicting_hypothesis_refs: []
+shared_evidence_map:
+dependency_map:
+main_risks: []
+invalidation_conditions: []
+constraint_refs: []
+quality_ref:
+uncertainty:
+created_at:
+valid_until:
+```
+
+## Invariants
+
+- 複数仮説の平均ではない
+- 新しいAI案をその場で追加しない
+- SignalとTrade Thesisを同一Objectにしない
+
+---
+
+# OBJ-PRD-004: AIReviewResult
+
+## Meaning
+
+外部AIがTrade Thesis全体を独立査読した補助結果Object。
+
+## Owner
+
+External AI Review
+
+## Main Fields
+
+```yaml
+ai_review_id:
+trade_thesis_ref:
+reviewer_id:
+reviewer_model_version:
+reviewed_at:
+recommendation: TRADE | WAIT | REJECT | UNKNOWN
+identified_redundancy: []
+shared_evidence_concerns: []
+contradictions: []
+missing_alternatives: []
+uncertainty:
+new_research_candidate_refs: []
+```
+
+## Invariants
+
+AI ReviewはAdvisory。AI停止時も本番経路を成立可能にする。
+
+---
+
+# OBJ-PRD-005: SignalDecision
+
+## Meaning
+
+Trade ThesisにRiskを取るだけの期待値・適用可能性があるかを判断した結果Object。
+
+## Owner
+
+Signal Engine
+
+## Main Fields
+
+```yaml
+signal_decision_id:
+trade_thesis_ref:
+decision: BUY | SELL | NO_TRADE
+expected_value_profile:
+applicability_state:
+constraint_state:
+data_quality_state:
+uncertainty:
+ai_review_refs: []
+reason_codes: []
+created_at:
+valid_until:
+```
+
+## Invariants
+
+万能総合点だけで決めない。
+
+NO_TRADEも必要に応じて研究可能なDecisionとして保存する。
+
+---
+
+# OBJ-PRD-006: DefenseDecision
+
+## Meaning
+
+Signalが取りたいRiskを、現在安全に取ってよいか判定したSafety Gate Object。
+
+## Owner
+
+Pre-Trade Defense
+
+## Main Fields
+
+```yaml
+defense_decision_id:
+signal_decision_ref:
+decision: ALLOW | REDUCE | BLOCK
+risk_state:
+constraint_checks: []
+data_quality_state:
+liquidity_state:
+spread_state:
+slippage_risk:
+drawdown_state:
+consecutive_loss_state:
+exposure_state:
+exchange_health_state:
+abnormal_event_state:
+reason_codes: []
+created_at:
+```
+
+## Invariants
+
+Signal = 取りたいか。
+Defense = 今取ってよいか。
+両者を統合しない。
+
+---
+
+# OBJ-PRD-007: RiskState
+
+## Meaning
+
+現在OSがどの程度Riskを許可するかを表す横断状態Object。
+
+## Owner
+
+Risk Governance / Defense
+
+## Candidate States
+
+```text
+NORMAL
+CAUTION
+RISK_REDUCED
+MICRO_ONLY
+NO_NEW_ENTRY
+EMERGENCY
+```
+
+## Main Fields
+
+```yaml
+risk_state_id:
+state:
+trigger_refs: []
+money_dd_state:
+edge_health_state:
+execution_health_state:
+data_health_state:
+market_novelty_state:
+allowed_exposure:
+allowed_trade_stage:
+effective_from:
+review_condition:
+```
+
+## Invariants
+
+損失発生後だけでなく、Edge / Data / Execution劣化もRisk縮小理由になり得る。
+
+数値閾値はResearch / Risk Designで別途定義する。
+
+---
+
+# OBJ-PRD-008: OrderIntent
+
+## Meaning
+
+Productionの判断を取引所非依存の注文意図として表すObject。
+
+## Owner
+
+Execution Logic
+
+## Main Fields
+
+```yaml
+order_intent_id:
+trade_thesis_ref:
+signal_decision_ref:
+defense_decision_ref:
+market_profile_id:
+side:
+order_type:
+requested_size:
+price_condition:
+time_in_force:
+risk_limits:
+execution_constraints: []
+created_at:
+expires_at:
+```
+
+## Invariants
+
+Exchange固有payloadをCoreへ漏らさない。
+
+---
+
+# OBJ-PRD-009: ExecutionRecord
+
+## Meaning
+
+OrderIntentがExchange Adapterでどう送信・約定されたかを記録する実行証拠Object。
+
+## Owner
+
+Exchange Adapter / Execution
+
+## Main Fields
+
+```yaml
+execution_record_id:
+order_intent_ref:
+exchange_order_id:
+submitted_at:
+acknowledged_at:
+fills: []
+requested_price:
+average_fill_price:
+requested_size:
+filled_size:
+partial_fill_state:
+fees:
+slippage:
+latency:
+exchange_status:
+diagnostics_ref:
+```
+
+## Invariants
+
+Strategy OutcomeとExecution Outcomeを分離可能にする。
+
+---
+
+# OBJ-PRD-010: EntryThesis
+
+## Meaning
+
+実際にPositionへ入る直前 / 入った時点のTrade Thesis・Evidence・Versionを固定する不変Snapshot。
+
+## Owner
+
+Production / Logger
+
+## Main Fields
+
+```yaml
+entry_thesis_id:
+trade_thesis_ref:
+trade_thesis_version:
+hypothesis_set_ref:
+market_context_ref:
+market_dna_ref:
+feature_priority_ref:
+formula_feature_versions:
+evidence_refs: []
+shared_evidence_map:
+dependency_map:
+constraint_refs: []
+signal_decision_ref:
+defense_decision_ref:
+risk_state_ref:
+entry_time:
+uncertainty:
+```
+
+## Invariants
+
+Entry後に「当時の理由」を書き換えない。
+
+---
+
+# OBJ-PRD-011: PositionThesisState
+
+## Meaning
+
+保有中のTrade Thesis健全性を時間経過で追跡する状態Object。
+
+## Owner
+
+Position Supervisor
+
+## Candidate States
+
+```text
+HOLD
+WATCH
+CAUTION
+THESIS_WEAKENING
+THESIS_INVALIDATED
+```
+
+EMERGENCYはIn-Trade Defense側のSafety状態として分離する。
+
+## Main Fields
+
+```yaml
+position_thesis_state_id:
+trade_id:
+entry_thesis_ref:
+as_of:
+state:
+primary_hypothesis_state:
+supporting_states:
+contradicting_states:
+expected_effect_progress:
+thesis_decay_state:
+reason_codes: []
+persistence_duration:
+change_magnitude:
+```
+
+## Invariants
+
+短期ノイズで状態が頻繁反転しないよう、Hysteresis / Persistence規則を後続設計で持つ。
+
+---
+
+# OBJ-PRD-012: ExitDecision
+
+## Meaning
+
+通常ExitまたはSafety Exitの判断結果Object。
+
+## Owner
+
+Exit Engine / In-Trade Defense
+
+## Main Fields
+
+```yaml
+exit_decision_id:
+trade_id:
+position_thesis_state_ref:
+decision_type:
+reason:
+normal_exit_logic_ref:
+in_trade_defense_ref:
+created_at:
+```
+
+## Invariants
+
+Position Supervisorの助言と最終Exit判断を分離する。
+
+---
+
+# OBJ-PRD-013: ProductionEvidence
+
+## Meaning
+
+実市場でしか得られない約定・摩擦・実行現実性を含むLive Evidence。
+
+## Owner
+
+Execution / Logger / Post-Trade
+
+## Main Fields
+
+```yaml
+production_evidence_id:
+trade_id:
+trade_thesis_ref:
+execution_record_refs: []
+fill_quality:
+slippage:
+fees:
+funding:
+partial_fill:
+liquidity_impact:
+exchange_latency:
+market_event_refs: []
+created_at:
+```
+
+## Invariants
+
+Historical / Demo Evidenceへ混ぜず、LIVE Channelとして保持する。
+
+---
+
+# OBJ-PRD-014: TradeResult
+
+## Meaning
+
+一つの実取引またはSimulation取引の最終Outcome Object。
+
+## Owner
+
+Logger / Post-Trade
+
+## Main Fields
+
+```yaml
+trade_id:
+trial_id:                  # Demo / Researchなら使用
+experiment_mode:
+evidence_source_channel:
+entry_thesis_ref:
+execution_record_refs: []
+entry_time:
+entry_price:
+exit_time:
+exit_price:
+position_size:
+fees:
+slippage:
+pnl:
+mae:
+mfe:
+exit_reason:
+market_event_refs: []
+quality_ref:
+```
+
+## Invariants
+
+Trade Result = Hypothesis Resultではない。
+
+---
+
+# I. POST-TRADE / FEEDBACK OBJECTS
+
+# OBJ-POST-001: OutcomeAnalysisResult
+
+## Meaning
+
+Trade ResultをWIN / LOSSだけでなく、期待値・Horizon・MAE/MFE・Opportunity Cost等で分析したObject。
+
+## Owner
+
+Post-Trade Analysis
+
+## Candidate Classification
+
+```text
+EXPECTED_SUCCESS
+UNEXPECTED_SUCCESS
+EXPECTED_FAILURE
+UNEXPECTED_FAILURE
+MISSED_OPPORTUNITY
+SYSTEM_FAILURE
+```
+
+## Main Fields
+
+```yaml
+outcome_analysis_id:
+trade_result_ref:
+classification:
+expected_vs_actual:
+horizon_evaluation:
+mae_mfe_evaluation:
+exit_timing_evaluation:
+slippage_evaluation:
+risk_adjusted_outcome:
+similar_case_refs: []
+```
+
+---
+
+# OBJ-POST-002: TradeThesisEvaluation
+
+## Meaning
+
+Trade Outcomeとは独立して、Trade Thesis自体が市場説明・期待Effectとして妥当だったかを評価するObject。
+
+## Owner
+
+Post-Trade Analysis
+
+## Main Fields
+
+```yaml
+trade_thesis_evaluation_id:
+trade_thesis_ref:
+trade_result_ref:
+thesis_outcome:
+expected_effect_occurred:
+expected_horizon_met:
+invalidation_correct:
+contradiction_handling:
+applicability_correct:
+uncertainty_evaluation:
+```
+
+---
+
+# OBJ-POST-003: HypothesisAttribution
+
+## Meaning
+
+Trade Thesisを構成した各Hypothesisが結果へどう寄与したかを個別評価するObject。
+
+## Owner
+
+Post-Trade Analysis
+
+## Main Fields
+
+```yaml
+hypothesis_attribution_id:
+trade_id:
+hypothesis_ref:
+role_in_thesis:
+expected_effect_occurred:
+expected_horizon_met:
+evidence_remained_valid:
+contradiction_strength:
+applicability_correct:
+shared_evidence_issue:
+dependency_issue:
+contribution_assessment:
+research_candidate_refs: []
+```
+
+## Invariants
+
+TradeがLossでもHypothesisを自動Retireしない。
+
+---
+
+# OBJ-POST-004: DefenseEvaluation
+
+## Meaning
+
+ALLOW / REDUCE / BLOCKが本当に安全性を高めたかを後から評価するObject。
+
+## Owner
+
+Post-Trade Analysis
+
+## Main Fields
+
+```yaml
+defense_evaluation_id:
+defense_decision_ref:
+shadow_trade_ref:
+actual_or_simulated_outcome:
+avoided_loss:
+missed_profit:
+constraint_effectiveness:
+false_block_candidate:
+research_candidate_refs: []
+```
+
+---
+
+# OBJ-POST-005: SupervisorEvaluation
+
+## Meaning
+
+Position Supervisorの警告・Thesis State変化が有用だったかを評価するObject。
+
+## Owner
+
+Post-Trade Analysis
+
+## Main Fields
+
+```yaml
+supervisor_evaluation_id:
+trade_id:
+state_history_refs: []
+action_followed:
+outcome_after_warning:
+false_alarm_candidate:
+late_warning_candidate:
+research_candidate_refs: []
+```
+
+---
+
+# OBJ-POST-006: DemoLiveDivergence
+
+## Meaning
+
+Historical / Demo Forwardでは成立したがLiveで崩れた等、Evidence Channel間の差を研究対象として保存するObject。
+
+## Owner
+
+Post-Trade / Research Router
+
+## Main Fields
+
+```yaml
+divergence_id:
+target_hypothesis_or_set_ref:
+historical_profile:
+demo_profile:
+live_profile:
+execution_difference:
+slippage_difference:
+liquidity_difference:
+regime_difference:
+data_quality_difference:
+model_error_candidates: []
+research_candidate_ref:
+```
+
+## Invariants
+
+Live Failureだけで即HypothesisをRetireせず、Execution / Market / Demo Model差を分解する。
+
+---
+
+# OBJ-POST-007: CounterfactualResult
+
+## Meaning
+
+実際とは別判断をした場合の結果を比較する研究補助Object。
+
+## Owner
+
+Post-Trade Analysis / Experimental Framework
+
+## Main Fields
+
+```yaml
+counterfactual_result_id:
+trade_or_trial_ref:
+actual_action:
+alternative_action:
+model_assumptions:
+simulated_outcome:
+uncertainty:
+limitations: []
+```
+
+## Invariants
+
+反実仮想を実測Evidenceと同等に扱わない。
+
+---
+
+# OBJ-POST-008: ResearchRoute
+
+## Meaning
+
+Post-Trade / Failure / AnomalyをどのResearch領域へ戻すかを記録するRouting Object。
+
+## Owner
+
+Research Router
+
+## Main Fields
+
+```yaml
+research_route_id:
+origin_object_refs: []
+route_type:
+target_research_domain:
+priority:
+reason:
+created_research_candidate_ref:
+created_at:
+```
+
+## Invariants
+
+直接Trainerへ流さず、原因に応じたResearchへ戻す。
+
+---
+
+# J. PLATFORM / OPERATIONS OBJECTS
+
+# OBJ-OPS-001: SystemStatus
+
+## Meaning
+
+Runtime / Market Instance /主要Subsystemの現在状態を表すOperational Object。
+
+## Owner
+
+Runtime / Monitoring
+
+## Candidate Runtime States
+
+```text
+BOOTING
+RUNNING
+PAUSED
+DEGRADED
+ERROR
+RECOVERY
+STOPPING
+STOPPED
+```
+
+## Main Fields
+
+```yaml
+system_status_id:
+instance_id:
+as_of:
+runtime_state:
+market_profile_id:
+subsystem_states:
+active_incident_refs: []
+resource_snapshot_ref:
+health_summary:
+```
+
+---
+
+# OBJ-OPS-002: ErrorEvent
+
+## Meaning
+
+Runtime / Data / Research / Production / Adapter等で発生した処理エラーを標準化するOperational Object。
+
+## Owner
+
+各Role / Failure Governance
+
+## Main Fields
+
+```yaml
+error_event_id:
+error_code:
+category:
+severity:
+origin_role:
+related_object_refs: []
+occurred_at:
+retryable:
+retry_count:
+impact_scope:
+containment_state:
+recovery_state:
+stack_or_diagnostic_ref:
+```
+
+## Invariants
+
+同じErrorを無限Retryしない。Retry PolicyはFailure Governanceで定義する。
+
+---
+
+# OBJ-OPS-003: Incident
+
+## Meaning
+
+単発Errorではなく、複数Errorや異常をまとめて扱う障害単位Object。
+
+## Owner
+
+Failure Governance / Monitoring
+
+## Main Fields
+
+```yaml
+incident_id:
+severity:
+started_at:
+resolved_at:
+error_event_refs: []
+affected_roles: []
+affected_object_refs: []
+affected_active_position_refs: []
+containment_action_refs: []
+root_cause_state:
+recovery_action_refs: []
+postmortem_ref:
+```
+
+## Invariants
+
+市場Data障害がどのActive Positionへ影響するかForward Impact Trace可能にする。
+
+---
+
+# OBJ-OPS-004: ResourceSnapshot
+
+## Meaning
+
+RAM / CPU / Disk / Queue / Cache / DB等のResource利用状況を記録するObject。
+
+## Owner
+
+Monitoring / Resource Governance
+
+## Main Fields
+
+```yaml
+resource_snapshot_id:
+as_of:
+cpu_usage:
+memory_usage:
+disk_usage:
+db_size:
+queue_sizes:
+cache_sizes:
+process_count:
+research_resource_usage:
+threshold_state:
+```
+
+## Invariants
+
+監視だけで終わらせず、Resource Budget / Retention / DEGRADED条件へ接続できる。
+
+---
+
+# OBJ-OPS-005: RecoveryAction
+
+## Meaning
+
+Error / Incidentから安全に復旧するために実施した操作Object。
+
+## Owner
+
+Recovery / Runtime
+
+## Main Fields
+
+```yaml
+recovery_action_id:
+incident_ref:
+action_type:
+target:
+started_at:
+finished_at:
+result:
+retry_policy_ref:
+precondition:
+postcondition:
+operator_or_automation:
+```
+
+## Invariants
+
+Restart無限Loopを許可しない。
+
+---
+
+# OBJ-OPS-006: MigrationRecord
+
+## Meaning
+
+Schema / Object / Storage / Code移行の履歴を残す長期互換性Object。
+
+## Owner
+
+Version / Migration Governance
+
+## Main Fields
+
+```yaml
+migration_record_id:
+migration_type:
+from_version:
+to_version:
+affected_object_types: []
+started_at:
+finished_at:
+status:
+backup_ref:
+validation_result:
+rollback_plan_ref:
+```
+
+## Invariants
+
+古いKnowledgeを新Schemaへ移行した際、出所・元Versionを失わない。
+
+---
+
+# OBJ-OPS-007: BackupRecord
+
+## Meaning
+
+重要Knowledge / DB / Config等のBackup取得と復元可能性を記録するObject。
+
+## Owner
+
+Backup / Disaster Recovery Governance
+
+## Main Fields
+
+```yaml
+backup_record_id:
+backup_scope:
+created_at:
+storage_location_class:
+content_hash:
+encryption_state:
+immutable_state:
+restore_tested_at:
+restore_test_result:
+retention_class:
+```
+
+## Invariants
+
+Backupが存在するだけで安全とみなさず、Restore Testを追跡する。
+
+---
+
+# OBJ-OPS-008: AuditEvent
+
+## Meaning
+
+重要な設定変更・Risk変更・Production操作・Governance判断を追跡する監査Object。
+
+## Owner
+
+Governance / Runtime / Security
+
+## Main Fields
+
+```yaml
+audit_event_id:
+action:
+actor:
+target_object_refs: []
+before_ref:
+after_ref:
+reason:
+created_at:
+authorization_ref:
+```
+
+## Invariants
+
+重要変更を「誰が・なぜ」行ったか追跡可能にする。
+
+---
+
+# 7. Evidence Source Channel共通定義
+
+Research / Post-Trade / Knowledgeでは最低限次を区別する。
+
+```text
+RANDOM
+HISTORICAL
+REPLAY
+OOS
+REGIME
+PAPER
+DEMO_FORWARD
+SHADOW
+COUNTERFACTUAL
+STRESS
+LIVE
+```
+
+原則:
+
+```text
+Historical Evidence
+≠ Demo Forward Evidence
+≠ Live Production Evidence
+```
+
+EvidencePackageで束ねることはできるが、元Channelを消して統合しない。
+
+---
+
+# 8. SnapshotとCurrent Stateの区別
+
+同じ概念でも、現在値と過去Snapshotを区別する。
+
+例:
+
+```text
+Current MarketDNA
+= 現在参照している市場状態
+
+MarketDNA Snapshot
+= 過去Case / Trade時点で固定されたDNA
+```
+
+```text
+Current Hypothesis status
+= 現時点のKnowledge状態
+
+EntryThesis.hypothesis_version
+= Entry時点に実際に使ったHypothesis状態
+```
+
+後からKnowledgeが改善されても過去Tradeの判断理由を書き換えない。
+
+---
+
+# 9. Object参照の原則
+
+同じ情報を複数Objectへ全文コピーするより、ID参照を基本とする。
+
+例:
+
+```text
+TradeThesis
+→ hypothesis_id
+→ evidence_id
+→ feature_id
+→ raw_data_id
+```
+
+ただし、EntryThesis等の監査・再現に重要なSnapshotでは、必要最小限のValueを同時固定してよい。
+
+この境界はData Contract / DB Schemaで確定する。
+
+---
+
+# 10. Provenance Chain
+
+主要判断Objectは最低限次の経路を逆引きできることを目標とする。
+
+```text
+Trade Result
+↓
+Entry Thesis
+↓
+Trade Thesis
+↓
+Applicable Hypothesis Set
+↓
+Hypothesis / Edge
+↓
+Evidence
+↓
+Feature
+↓
+Formula / Measurement
+↓
+Observation / Market Event
+↓
+Raw Data
+↓
+Source
+```
+
+---
+
+# 11. Forward Impact Chain
+
+長期運用では逆引きだけでなく、上流障害が下流へ何を壊すか追跡する。
+
+```text
+Source Failure
+↓
+Affected Observation
+↓
+Affected Feature
+↓
+Affected Evidence
+↓
+Affected Hypothesis
+↓
+Affected Trade Thesis
+↓
+Affected Active Position
+```
+
+これを新Layerとして作るのではなく、Object Relationship / Trace / Dependency情報で実現する。
+
+---
+
+# 12. Objectを勝手に統合しない組み合わせ
+
+以下は意味が異なるため、安易に一Objectへ統合しない。
+
+```text
+Observation ≠ MarketEvent
+Feature ≠ Evidence
+MarketContext ≠ MarketDNA
+MarketDNA ≠ FeaturePriorityProfile
+CauseCandidate ≠ CausalHypothesis
+CausalHypothesis ≠ Edge
+ResearchResult ≠ EvidencePackage
+HypothesisPoolEntry ≠ ApplicableHypothesisSet
+ApplicableHypothesisSet ≠ TradeThesis
+TradeThesis ≠ SignalDecision
+SignalDecision ≠ DefenseDecision
+TradeThesis ≠ EntryThesis
+PositionThesisState ≠ ExitDecision
+TradeResult ≠ TradeThesisEvaluation
+TradeResult ≠ HypothesisAttribution
+ErrorEvent ≠ Failure Knowledge
+```
+
+---
+
+# 13. ObjectをTop-Level Layerへ昇格させない原則
+
+以下は重要Objectだが、それだけを理由に独立巨大Layerへしない。
+
+```text
+MarketDNA
+TradeThesis
+EntryThesis
+EvidencePackage
+FailureBoundary
+Constraint
+ResearchCandidate
+RiskState
+```
+
+Role Dictionaryに独立責任主体が定義されている場合のみRole / Module化を検討する。
+
+---
+
+# 14. Object追加Gate
+
+新Objectを追加する前に次を確認する。
+
+```text
+1. 既存ObjectのField追加で表現できないか
+2. 単なるViewではないか
+3. 単なるStateではないか
+4. 単なるContractではないか
+5. 別Objectとして独立ID / Lifecycle / Versionが必要か
+6. 監査・再現・研究上、独立保存する価値があるか
+7. 既存Objectとの重複率は高くないか
+8. 何十年保存する意味があるか
+```
+
+独立ID / Lifecycle / Version / Ownerが不要なら、新Objectを増やさない。
+
+---
+
+# 15. Object変更ルール
+
+Objectの意味・必須Field・Lifecycle・Ownerを変更する場合:
+
+1. `DESIGN_CHANGE_RULES.md` に従う
+2. 既存Objectとの互換性を確認する
+3. Schema Migration要否を確認する
+4. 過去Objectを読み込めるか確認する
+5. Trace / Provenanceが切れないか確認する
+6. Production Snapshot再現性を確認する
+7. Migration / Rollback Planを作る
+
+単なるPython class変更だけでSemantic Object定義を勝手に変えない。
+
+---
+
+# 16. Object LifecycleとSTATE_DICTIONARYの関係
+
+本書はObjectの意味を定義する。
+
+Stateの正式語彙・遷移は後続の:
+
+```text
+01_DICTIONARY/STATE_DICTIONARY.md
+```
+
+をSingle Source of Truth候補とする。
+
+本書に書かれているState一覧は現時点の候補であり、STATE_DICTIONARY作成時に重複・矛盾を整理する。
+
+---
+
+# 17. ObjectとDATA_CONTRACTの関係
+
+本書:
+
+```text
+Object = 何の情報か
+```
+
+後続 `DATA_CONTRACT.md`:
+
+```text
+誰が
+どのObjectを
+どの条件で
+どのVersionで
+誰へ渡すか
+```
+
+を定義する。
+
+Object Dictionary内へRole間通信規則を過剰に埋め込まない。
+
+---
+
+# 18. ObjectとDATABASE_SCHEMAの関係
+
+本書のObjectとDB Tableを1:1固定しない。
+
+例:
+
+```text
+Logical Object
+CausalHypothesis
+
+Physical Storage
+hypotheses table
+hypothesis_versions table
+evidence_links table
+```
+
+のように分割される可能性がある。
+
+DB Schemaは後からStorage効率・Query・Migrationを考えて決める。
+
+重要:
+
+> Semantic ObjectがDB都合で壊れないこと。
+
+---
+
+# 19. ObjectとPython Modelの関係
+
+本書のObjectとPython classを1:1永久固定しない。
+
+実装時には例として:
+
+```text
+Pydantic Model
+Dataclass
+ORM Model
+TypedDict
+Event Schema
+```
+
+等へ落とせる。
+
+ただしコード側の命名と意味は本辞書へ従う。
+
+---
+
+# 20. Storage Lifecycle区分
+
+Objectごとに将来Retention Classを付与する。
+
+候補:
+
+```text
+HOT
+WARM
+COLD
+ARCHIVE
+EPHEMERAL
+IMMUTABLE_LONG_TERM
+```
+
+例:
+
+```text
+Recent Observation
+→ HOT / WARM
+
+Old compressed Raw
+→ COLD / ARCHIVE
+
+Cache
+→ EPHEMERAL
+
+Important Hypothesis / Failure / Trade / Knowledge
+→ IMMUTABLE_LONG_TERM候補
+```
+
+具体的保存期間は `STORAGE.md` / Long-Term Governanceで決める。
+
+---
+
+# 21. Knowledge Aging共通原則
+
+長期Knowledge Objectは最低限、可能なものについて:
+
+```text
+created_at
+last_validated_at
+revalidation_due_at
+status
+staleness
+```
+
+を追跡できるようにする。
+
+古い = 無効ではない。
+
+ただし:
+
+> 長期間再検証されていない = 不確実性が増えている可能性
+
+として扱う。
+
+---
+
+# 22. Object Definition of Done
+
+一つの重要Objectを完全設計済みとみなす最低条件:
+
+```text
+□ Object ID / Name
+□ Meaning
+□ Category
+□ Owner Role
+□ Generator
+□ Primary Inputs / Parent Objects
+□ Main Fields
+□ ID rule
+□ Version rule
+□ Lifecycle / State relation
+□ Trace / Provenance
+□ Quality / Uncertainty relation
+□ Mutability
+□ Retention class候補
+□ Security / Privacy consideration
+□ Invariants
+□ Prohibitions
+□ Downstream users
+□ Migration consideration
+□ Failure / invalid object handling
+```
+
+本辞書はSemantic Levelの完全設計候補であり、各Objectの型・nullability・enum・index等はData Contract / DB Schemaでさらに固定する。
+
+---
+
+# 23. 現時点のObject一覧
+
+## Common / Control
+
+```text
+MarketProfile
+SourceMetadata
+QualityProfile
+Diagnostics
+RuntimeCommand
+GlobalRiskLimit
+```
+
+## Observation / Data
+
+```text
+RawData
+Observation
+MarketEvent
+NormalizedObservation
+TimeSeriesMeasurement
+```
+
+## Measurement / Feature
+
+```text
+FormulaDefinition
+MeasurementResult
+Feature
+FeaturePriorityProfile
+```
+
+## Market Understanding
+
+```text
+MarketContext
+Evidence
+Contradiction
+UnexplainedEvent
+```
+
+## Causal / DNA
+
+```text
+CauseCandidate
+EffectDefinition
+CausalHypothesis
+HypothesisAssessmentProfile
+MarketDNA
+RegimeProfile
+```
+
+## Research
+
+```text
+ResearchCandidate
+ResearchPlan
+ResearchTrial
+ResearchResult
+EvidencePackage
+ApplicabilityProfile
+Edge
+ResearchBudget
+```
+
+## Knowledge
+
+```text
+MarketCase
+FeatureKnowledge
+FormulaKnowledge
+Failure
+StressResult
+FailureBoundary
+Constraint
+NegativeKnowledge
+KnowledgeRelationship
+KnowledgeLifecycleProfile
+```
+
+## Production
+
+```text
+HypothesisPoolEntry
+ApplicableHypothesisSet
+TradeThesis
+AIReviewResult
+SignalDecision
+DefenseDecision
+RiskState
+OrderIntent
+ExecutionRecord
+EntryThesis
+PositionThesisState
+ExitDecision
+ProductionEvidence
+TradeResult
+```
+
+## Post-Trade
+
+```text
+OutcomeAnalysisResult
+TradeThesisEvaluation
+HypothesisAttribution
+DefenseEvaluation
+SupervisorEvaluation
+DemoLiveDivergence
+CounterfactualResult
+ResearchRoute
+```
+
+## Platform / Operations
+
+```text
+SystemStatus
+ErrorEvent
+Incident
+ResourceSnapshot
+RecoveryAction
+MigrationRecord
+BackupRecord
+AuditEvent
+```
+
+---
+
+# 24. 現時点で意図的にObject化しないもの
+
+以下は現段階では独立Persistent Objectとして確定しない。
+
+```text
+Case Library
+Market Memory
+Failure Museum
+Knowledge Graph
+```
+
+理由:
+
+Knowledge DomainのViewだから。
+
+また:
+
+```text
+RANDOM_BASELINE
+HISTORICAL
+REPLAY
+PAPER
+DEMO_FORWARD
+SHADOW
+COUNTERFACTUAL
+```
+
+はExperiment Modeであり、Objectではない。
+
+`DemoForwardTrial` を別Objectとして乱立させず、基本は `ResearchTrial + experiment_mode = DEMO_FORWARD` として表現する。
+
+---
+
+# 25. 未確定・次文書へ送る論点
+
+以下は本辞書で名前と意味を整理するが、最終仕様は後続文書で確定する。
+
+1. 正式State一覧 → `STATE_DICTIONARY.md`
+2. Market DNAとRegimeの正式依存関係 → Architecture / State設計
+3. Feature Priorityが参照するDNAの時系列規則 → Architecture / Data Flow
+4. Soft / Hard ContradictionのProduction Gate → Production Contract
+5. Risk Stateの閾値 → Risk Design / Research
+6. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
+7. Object間Cardinality → `DATA_CONTRACT.md` / `DATABASE_SCHEMA.md`
+8. Retention期間 → Storage Governance
+9. Encryption / Secret分類 → Security Design
+10. Schema Migration実装 → Version / Migration Design
+
+---
+
+# 26. 最終原則
+
+市場理解OSでは:
+
+> **Roleは仕事をする。**
+>
+> **Objectは意味を運ぶ。**
+>
+> **Contractは受け渡しを守る。**
+>
+> **StateはLifecycleを表す。**
+>
+> **Knowledgeは長期に残る。**
+>
+> **Codeはこれらを実装する手段であり、意味の正本ではない。**
+
+何十年以上運用するため、Python・DB・Exchange・AI Providerが変わっても、Objectの意味・Version・Provenance・Research履歴・Trade判断履歴を失わない設計を優先する。
