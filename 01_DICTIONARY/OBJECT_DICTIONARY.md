@@ -567,18 +567,24 @@ trace_id:
 
 ## Meaning
 
-市場で発生した一つの現象を識別するObject。
+Observation / TimeSeriesMeasurement / Featureから検出された、「市場で何かが発生した」という事実寄りの現象を一意に識別するImmutable Event Object。市場解釈・予測・因果主張とは分離する。
 
-## Owner
+## Owner / Generator
 
-Market Intelligence / Event Detection
+`ROLE-EVT-001: Event Detection Processor`
+
+Market IntelligenceはMarketEventのConsumer / Interpreterであり、Canonical MarketEventの直接Generatorではない。
 
 ## Example
 
 ```text
-OI increased rapidly
-ETF flow shock
-Liquidity collapse
+OI_SHOCK
+ETF_FLOW_SHOCK
+LIQUIDITY_COLLAPSE
+FUNDING_RATE_JUMP
+LIQUIDATION_SHOCK
+VOLATILITY_EXPANSION
+SPREAD_WIDENING
 ```
 
 ## Main Fields
@@ -586,22 +592,83 @@ Liquidity collapse
 ```yaml
 market_event_id:
 event_type:
-start_at:
-end_at:
 market_profile_id:
+
+detected_at:
+start_at:
+peak_at:
+end_at:
+
+detection_rule_ref:
+detection_rule_version:
+detector_version:
+
 observation_refs: []
+time_series_measurement_refs: []
 feature_refs: []
+source_refs: []
+
 event_magnitude:
 quality_ref:
 confidence:
+detector_health_at_detection:
+
+deduplication_key:
+canonicalization_refs: []
 trace_refs: []
+```
+
+## FIX-007 Generation Boundary
+
+```text
+Observation / TimeSeriesMeasurement / Feature
+↓
+Event Detection Processor
+↓
+MarketEvent
+├→ Feature Priority
+├→ Market Intelligence
+├→ Causal Engine
+└→ Research
+```
+
+Meaning boundary:
+
+```text
+Observation = 何を観測したか
+Feature = どう測ったか
+MarketEvent = 何が発生したか
+MarketContext = 今どんな市場か
+CauseCandidate = なぜ発生した可能性があるか
 ```
 
 ## Invariants
 
-- Trace IDと分離する
-- 同じ実市場Eventを複数Trialで別Eventとして水増ししない
-- 後からEvent同定ルールが変わる場合はVersionを残す
+- MarketEventは事実寄りのEventであり、BUY / SELL・価格予測・因果確定を含めない
+- `BTC_WILL_CRASH` 等の予測をEvent Typeとして使わない
+- `WHALES_ARE_MANIPULATING_MARKET` 等の因果解釈をEvent Typeとして使わない
+- Market Intelligence / Causal Engineが事後的にCanonical MarketEventを直接追加しない
+- Trace IDとMarket Event IDを分離する
+- 同じ実市場Eventを複数Source / Observation / Trialで別Eventとして水増ししない
+- 複数Providerが同じ現象を観測した場合でも、必要に応じて一つのCanonical MarketEventへ統合し、Source / Observation参照は失わない
+- Event Detection Rule変更時は`detection_rule_version`を残し、過去Eventの意味を新Ruleで無言に書き換えない
+- `NO_EVENT_DETECTED` と `EVENT_DETECTION_UNAVAILABLE / DEGRADED` を区別する。Detector異常時の空Event一覧を「市場Eventなし」とみなさない
+- Data Quality低下時は`quality_ref / confidence / detector_health_at_detection`から下流が不確実性を判断できるようにする
+- Event時刻はCausal EngineのTemporal Order / Lag研究へ利用可能な形で保持する
+- MarketEvent生成後に意味を上書きするのではなく、訂正が必要ならCorrection / Superseded関係を用いる
+
+## Failure / Research Feedback
+
+Market Intelligenceが重要変化を認識したのに対応するCanonical MarketEventが存在しない場合、MIが直接Eventを作るのではなく:
+
+```text
+UnexplainedEvent / ResearchCandidate
+→ Event Detection Research
+```
+
+へ戻す。
+
+Detection Miss / False Positive / Duplicate Split / Duplicate Merge Error / Rule StalenessはEvent Detection自体の研究対象にできる。
 
 ---
 
@@ -840,7 +907,7 @@ valid_until:
 ```text
 DNA_(t-1)
 +
-Current Basic Context / already-available Event information
+Current Basic Context / already-available MarketEvent information
 ↓
 FeaturePriority_t
 ↓
@@ -901,6 +968,8 @@ context_version:
 ## Invariants
 
 Cause確定・BUY / SELLを含めない。
+
+MarketContextはMarketEventを解釈・文脈化できるが、MarketEventのCanonical生成責任を持たない。
 
 ---
 
@@ -995,6 +1064,8 @@ research_candidate_ref:
 ## Invariants
 
 説明不能時に物語を捏造しない。
+
+Market Intelligenceが重要変化を認識したのに対応するCanonical MarketEventが無い場合、UnexplainedEvent / ResearchCandidate経由でEvent Detection Researchへ戻し、Canonical MarketEventを直接捏造しない。
 
 ---
 
@@ -1287,6 +1358,7 @@ Defense Block
 Supervisor Warning
 Execution Anomaly
 Data Quality Anomaly
+Event Detection Miss / False Positive
 Demo vs Live Divergence
 AI Review New Idea
 ```
@@ -3038,11 +3110,11 @@ CausalHypothesis / Edge
 ↓
 Evidence
 ↓
-Feature
+MarketEvent / Feature
 ↓
-FormulaDefinition / MeasurementResult
+Event Detection Rule / FormulaDefinition / MeasurementResult
 ↓
-Observation / MarketEvent
+Observation / TimeSeriesMeasurement
 ↓
 RawData
 ↓
@@ -3060,9 +3132,9 @@ Source Failure
 ↓
 Affected Observation
 ↓
-Affected Feature
+Affected Feature / Event Detection
 ↓
-Affected Evidence
+Affected MarketEvent / Evidence
 ↓
 Affected Hypothesis
 ↓
@@ -3081,6 +3153,9 @@ Affected Active Position
 
 ```text
 Observation ≠ MarketEvent
+Feature ≠ MarketEvent
+MarketEvent ≠ MarketContext
+MarketEvent ≠ CauseCandidate
 Feature ≠ Evidence
 MarketContext ≠ MarketDNA
 MarketDNA ≠ FeaturePriorityProfile
@@ -3498,13 +3573,14 @@ COUNTERFACTUAL
 1. 正式State一覧 → `STATE_DICTIONARY.md`
 2. Market DNAとRegimeの正式依存関係 → Architecture / State設計
 3. **Feature Priorityが参照するDNAの時系列原則はFIX-006で確定済み。Field型・Required/Nullable・Cycle境界Validationは `DATA_CONTRACT.md` / Data Flowで固定する**
-4. Soft / Hard ContradictionのProduction Gate → Production Contract
-5. Risk Stateの閾値 → Risk Design / Research
-6. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
-7. Object間Cardinality → `DATA_CONTRACT.md` / `DATABASE_SCHEMA.md`
-8. Retention期間 → Storage Governance
-9. Encryption / Secret分類 → Security Design
-10. Schema Migration実装 → Version / Migration Design
+4. **MarketEventのCanonical生成責任はFIX-007でEvent Detection Processorへ確定済み。Event Field型・Detection Rule参照型・Dedup/Cardinality・Detector HealthのContractは `DATA_CONTRACT.md` / Data Flowで固定する**
+5. Soft / Hard ContradictionのProduction Gate → Production Contract
+6. Risk Stateの閾値 → Risk Design / Research
+7. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
+8. Object間Cardinality → `DATA_CONTRACT.md` / `DATABASE_SCHEMA.md`
+9. Retention期間 → Storage Governance
+10. Encryption / Secret分類 → Security Design
+11. Schema Migration実装 → Version / Migration Design
 
 ---
 
