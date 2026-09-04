@@ -177,6 +177,8 @@ config_version:         # 再現性が必要な場合
 
 FIX-012以降、`status`をHypothesis / Edgeの研究成熟度・Knowledge Aging / Health・Production Promotion・Risk Stateをまとめる万能Fieldとして使用しない。
 
+FIX-014以降、`SourceMetadata.status`のように「一回の取得結果」と「Source自体のLifecycle」を一つの万能Fieldへ統合しない。
+
 ---
 
 # 5. IDとTraceの共通原則
@@ -223,6 +225,7 @@ State Transition Event ID
 
 ```text
 RawData
+SourceMetadata
 MarketEvent
 Feature
 ResearchResult
@@ -345,31 +348,144 @@ profile_version:
 
 ## Meaning
 
-外部データが「どこから、いつ、どの状態で取得されたか」を示すProvenance Object / Value Object。
+一回の外部データ取得・受信について、「どのLogical Sourceを、どのProvider Sourceから、いつ、どのEndpoint / Streamで、どの取得結果として受信したか」を保存するImmutable Provenance Object / Value Object。
 
-## Owner
+FIX-014以降、`SourceMetadata`はSource自体のCurrent Lifecycle Stateを表すObjectではない。
+
+```text
+SourceMetadata
+= per-retrieval / per-receive fact
+
+Source Lifecycle
+= source-level current state
+
+Data Quality
+= retrieved content trustworthiness
+```
+
+## Owner / Generator
 
 Collector / Source Adapter
 
 ## Main Fields
 
 ```yaml
-source_id:
+source_metadata_id:
+logical_source_ref:
+provider_source_ref:
 provider:
 endpoint_or_stream:
+request_id:
 requested_at:
 received_at:
 source_timestamp:
 latency_ms:
-status:
-schema_version:
+retrieval_status:
+retrieval_reason_codes: []
+provider_schema_version:
 raw_hash:
-request_id:
+source_state_at_capture:
+source_state_transition_ref_at_capture:
+diagnostics_ref:
 ```
+
+`source_state_at_capture / source_state_transition_ref_at_capture` は取得時点のSnapshot / Trace補助候補であり、Source Lifecycleの正本ではない。Required / Nullableは後続Data Contractで固定する。
+
+## Retrieval Status Candidate
+
+```text
+SUCCESS
+PARTIAL
+FAILED
+TIMEOUT
+CANCELLED
+INVALID_RESPONSE
+```
+
+Rate Limit / Authentication Error / Schema Mismatch等の細分類は、必要に応じて`retrieval_reason_codes / diagnostics_ref`へ保持する。
+
+## FIX-014 State Separation
+
+```text
+retrieval_status
+= この一回の取得・受信がどう終わったか
+
+STATE-SRC-001 Source Lifecycle
+= Logical Source / Provider Sourceを現在OSとしてどう扱うか
+
+QualityProfile / STATE-DQ-001
+= 取得された内容をどこまで信用できるか
+```
+
+したがって次は成立する。
+
+```text
+Source Lifecycle = ACTIVE
+retrieval_status = TIMEOUT
+```
+
+```text
+Source Lifecycle = DEGRADED
+retrieval_status = SUCCESS
+Data Quality = HEALTHY
+```
+
+```text
+Source Lifecycle = ACTIVE
+retrieval_status = SUCCESS
+Data Quality = DEGRADED
+```
+
+## Logical Source / Provider Source Boundary
+
+```text
+Logical Source
+≠ Provider Source
+```
+
+例:
+
+```text
+OPEN_INTEREST logical source = ACTIVE
+Provider A = UNAVAILABLE
+Provider B = FALLBACK
+```
+
+Provider Aの障害・廃止だけで`OPEN_INTEREST`という市場理解概念そのものを失わない。
+
+## FIX-014 Migration
+
+旧Field:
+
+```text
+SourceMetadata.status
+```
+
+は、一回のRetrieval ResultとSource Lifecycleの意味を混在させ得るLegacy Fieldとして扱う。
+
+新規設計では:
+
+```text
+per-retrieval outcome
+→ retrieval_status
+
+source-level current state
+→ STATE-SRC-001 + Current State Projection + StateTransitionEvent
+```
+
+へ分離する。
+
+過去`SourceMetadata.status`を現在のSource Lifecycleへ推測変換して旧Recordを書き換えない。旧Schema Versionとして読取可能性を維持する。
 
 ## Invariants
 
-Source情報を下流で失わない。
+- Source / Provider / Endpoint / Timestamp / Request ID等のProvenanceを下流で失わない
+- `SourceMetadata`は生成後にCurrent Source Lifecycle変更を理由として書き換えない
+- 一回の`TIMEOUT / FAILED`だけでSource Lifecycleを自動`DEGRADED / UNAVAILABLE`へ変更した事実として扱わない
+- 一回の`SUCCESS`だけでSource Lifecycleが`ACTIVE`へRecoveryした事実として扱わない
+- `retrieval_status = SUCCESS`を`Data Quality = HEALTHY`とみなさない
+- Source Lifecycle変更材料にはなり得るが、`SourceMetadata`自体がLifecycle TransitionをApplyしない
+- Logical SourceとProvider Sourceを同一ID / 同一Lifecycleとして扱わない
 
 ---
 
@@ -405,6 +521,8 @@ confidence_limit:
 - `PASS / FAIL`だけに圧縮しない
 - Quality低下を下流でHigh Confidenceへ勝手に戻さない
 - Quality Scoreを万能な謎スコアとして扱わない
+- FIX-014以降、`SourceMetadata.retrieval_status = SUCCESS`だけを理由にQualityを`HEALTHY`へ確定しない
+- Retrieval ResultとSource LifecycleとData Qualityを別責任として扱う
 
 ---
 
@@ -2667,7 +2785,7 @@ new_research_candidate_refs: []
 
 ## Invariants
 
-AI ReviewはAdvisory。AI停止時も本番経路を成立可能にする。
+AI ReviewはAdvisory。AI停止時もProduction Coreが原則動作可能にする。
 
 AIが新しいHypothesisを提案しても、現在TradeThesisへ直接追加せずResearchCandidateへ送る。
 
@@ -3742,6 +3860,16 @@ APPLY
 
 を一つの曖昧な`changed_by`概念へ潰さない。
 
+FIX-014ではSourceについて:
+
+```text
+SourceMetadata.retrieval_status
+≠ Source Lifecycle Current State
+≠ Data Quality State
+```
+
+を分離する。
+
 ApplicableHypothesisSet / TradeThesis / EntryThesisはそれぞれ生成時点の情報を固定し、後から現在Knowledgeが変わっても過去Production判断を無言で書き換えない。
 
 StateについてもCurrent Stateだけを上書きしてTransition Historyを失わない。
@@ -3764,7 +3892,10 @@ OrderIntent
 → evidence_id
 → feature_id / market_event_id
 → raw_data_id
+→ source_metadata_id
 ```
+
+SourceMetadataから`logical_source_ref / provider_source_ref`へ遡り、Source LifecycleのCurrent Projection / StateTransitionEventは別参照として追跡できるようにする。
 
 State MachineではCurrent Projectionから`latest_transition_event_ref`等を参照可能にし、StateTransitionEvent側は`target_object_ref / previous_transition_event_ref / trigger_refs / recommendation_ref / authorization_ref`から履歴・Authority provenanceを追跡できるようにする。
 
@@ -3810,6 +3941,8 @@ Observation / TimeSeriesMeasurement
 RawData
 ↓
 SourceMetadata
+↓
+Logical Source / Provider Source
 ```
 
 ProductionEvidence自体も`ExecutionRecord + EntryThesis + Live Context`まで逆引き可能にする。
@@ -3845,9 +3978,9 @@ Trigger / Evidence / Recommendation / Authorization / Apply Authority provenance
 長期運用では逆引きだけでなく、上流障害が下流へ何を壊すか追跡する。
 
 ```text
-Source Failure
+Source Retrieval Failure / Source Lifecycle Change
 ↓
-Affected Observation
+Affected RawData / Observation
 ↓
 Affected Feature / Event Detection
 ↓
@@ -3863,6 +3996,8 @@ Affected EntryThesis candidate
 ↓
 Affected Order / Active Position
 ```
+
+FIX-014では一回のRetrieval FailureをSource Lifecycle Changeそのものとして扱わず、Retrieval history / Monitoring / Provider healthをLifecycle Governanceの材料へ送る。
 
 FIX-012ではKnowledge health低下時に、研究成熟度を直接書き換えず:
 
@@ -3891,6 +4026,8 @@ Entry後はEntryThesisを書き換えず、影響はCurrent State / Supervisor /
 以下は意味が異なるため、安易に一Objectへ統合しない。
 
 ```text
+SourceMetadata Retrieval Result ≠ Source Lifecycle State ≠ Data Quality State
+Logical Source ≠ Provider Source
 Observation ≠ MarketEvent
 Feature ≠ MarketEvent
 MarketEvent ≠ MarketContext
@@ -3975,6 +4112,14 @@ REQUEST
 ≠ APPLY
 ```
 
+FIX-014では次を固定する。
+
+```text
+Retrieval Result
+≠ Source Lifecycle
+≠ Data Quality
+```
+
 ---
 
 # 13. ObjectをTop-Level Layerへ昇格させない原則
@@ -4009,6 +4154,8 @@ FIX-012では4軸分離を理由に`EdgeHealthObject`等の重複Object / Layer�
 
 FIX-013の各`State Controller`は独立巨大Layerではなく、各State MachineのApply responsibilityを示す論理責任名として扱う。共通`State Transition Engine`もMechanismでありAuthority Layerではない。
 
+FIX-014ではRetrieval Result / Source Lifecycle / Data Quality分離のために新しい巨大Layerを追加せず、既存`SourceMetadata`・`STATE-SRC-001`・`QualityProfile`の責任境界で解決する。
+
 ---
 
 # 14. Object追加Gate
@@ -4036,6 +4183,8 @@ FIX-012でも新Objectを追加せず、CausalHypothesis / Edge / KnowledgeLifec
 
 FIX-013ではApproval責任を定義しても`ApprovalDecision` Objectを先行追加しない。正式Object化はFIX-015でObject追加Gateを通して行う。
 
+FIX-014では`SourceRetrievalStateObject`等を新設せず、`SourceMetadata.retrieval_status`と既存Source Lifecycle / Data Qualityで表現する。
+
 ---
 
 # 15. Object変更ルール
@@ -4055,6 +4204,8 @@ Objectの意味・必須Field・Lifecycle・Ownerを変更する場合:
 FIX-012では旧`status` / Field名 / State履歴を無言で書き換えず、Migration Mappingを保持する。
 
 FIX-013ではAuthority Field追加後も過去StateTransitionEventを推測で補完・改変せず、旧Schema Versionとして読取可能にする。
+
+FIX-014では過去`SourceMetadata.status`をCurrent Source Lifecycleへ推測変換して旧Recordを書き換えず、旧Schema Versionとして読取可能性を維持する。
 
 ---
 
@@ -4094,6 +4245,21 @@ STATE-RISK-001 = Current OS Risk State
 を別軸として扱う。
 
 FIX-013では各State MachineのRequest / Recommend / Approve / Apply責任とApply Authorityの正本候補を`STATE_DICTIONARY.md`のAuthority Matrixへ置く。
+
+FIX-014では:
+
+```text
+SourceMetadata.retrieval_status
+= per-retrieval result
+
+STATE-SRC-001
+= Source Lifecycle current state
+
+QualityProfile / STATE-DQ-001
+= retrieved content quality
+```
+
+として責任を分離する。
 
 ---
 
@@ -4196,6 +4362,21 @@ AI / Logger / Post-Trade read/write authority boundary
 ApprovalDecision Objectとの将来Cardinality（FIX-015）
 ```
 
+FIX-014で決めた次もData / Processing / Source / Monitoring Contractで固定する。
+
+```text
+SourceMetadata field type / required / nullable
+retrieval_status enum / reason code taxonomy
+logical_source_ref / provider_source_ref identity and cardinality
+source_state_at_capture snapshot semantics
+per-request failure aggregation window
+DEGRADED / UNAVAILABLE trigger policy
+Source recovery confirmation / cooldown
+Fallback selection policy
+SourceMetadata → QualityProfile relation
+Legacy SourceMetadata.status migration rule
+```
+
 ---
 
 # 18. ObjectとDATABASE_SCHEMAの関係
@@ -4219,6 +4400,8 @@ evidence_links table
 StateTransitionEventもSemantic Objectとしては1つだが、DBではCurrent Projection TableとTransition History Tableへ分かれる可能性がある。
 
 ResearchPlanもLogical Objectとしては1つだが、Plan Version / Current Lifecycle / Current Lock / Transition Historyを物理的にどう保存するかはDB Schemaで決める。
+
+SourceMetadataはper-retrieval provenanceとして保存し、Source Lifecycle Current Stateを同じ`status` Columnへ圧縮しない。
 
 FIX-012ではHypothesis / Edge Lifecycle、Knowledge Aging / Health、Production Promotion、Risk Stateを一つの`status` Columnへ圧縮しない。
 
@@ -4272,6 +4455,15 @@ AND Risk State
 
 FIX-013以降、任意Moduleが直接`current_state = ...`を書き換える設計を避け、State Machine別Apply Authority / State Transition Engine経由で実装する。
 
+FIX-014以降、次のような実装を新規採用しない。
+
+```python
+if source_metadata.status == "DEGRADED":
+    source.current_state = "DEGRADED"
+```
+
+per-retrieval resultとSource Lifecycle transitionを分ける。
+
 ---
 
 # 20. Storage Lifecycle区分
@@ -4305,6 +4497,8 @@ Important Hypothesis / Failure / Trade / Knowledge
 → IMMUTABLE_LONG_TERM候補
 ```
 
+SourceMetadataはRawData provenance再現に必要なため、対応RawDataのRetention / Archive方針と整合した長期保存候補とする。Current Source Lifecycle変更を理由に過去SourceMetadataを書き換えない。
+
 EntryThesis / ProductionEvidence / ExecutionRecord / TradeResult / StateTransitionEventは監査・研究・再構築価値が高いため長期Immutable保存候補。
 
 FROZEN / SUPERSEDED ResearchPlan Versionと、それに紐づくResearchTrialも研究再現性のため長期保存候補。
@@ -4312,6 +4506,8 @@ FROZEN / SUPERSEDED ResearchPlan Versionと、それに紐づくResearchTrialも
 FIX-012以前の旧State / Fieldを持つHypothesis / Edge / Pool EntryもMigration監査のため読取可能性を維持する。
 
 FIX-013以前のStateTransitionEventでRecommendation provenanceを持たないEventも旧Schema Versionとして保持し、後から推測値で埋めない。
+
+FIX-014以前の`SourceMetadata.status`を持つRecordも旧Schema Versionとして保持し、現在Lifecycleを推測して上書きしない。
 
 具体的保存期間は `STORAGE.md` / Long-Term Governanceで決める。
 
@@ -4532,6 +4728,7 @@ THESIS_NOT_BUILDABLE
 ENTRY_SNAPSHOT_NOT_BUILDABLE
 StateTransitionAttempt
 ApprovalDecision
+SourceRetrievalStateObject
 HypothesisStateHistory
 RiskStateHistory
 RuntimeStateHistory
@@ -4547,6 +4744,7 @@ EdgeHealthObject
 - `ENTRY_SNAPSHOT_NOT_BUILDABLE` = FIX-009時点ではEntryThesisとは別Objectを新設せず、Entry Snapshot BuilderのDiagnostics / Processing Contract上のHard Gate非成立結果として扱う
 - `StateTransitionAttempt` = FIX-010では拒否・失敗Attempt専用Objectを増やさずAuditEvent / Diagnostics等で扱う
 - `ApprovalDecision` = FIX-013ではApprove責任だけを正式化し、独立Object化はFIX-015へ送る
+- `SourceRetrievalStateObject` = FIX-014では新Objectを作らず、per-retrieval結果はSourceMetadata、Source LifecycleはSTATE-SRC-001で表す
 - 個別State History名 = 共通`StateTransitionEvent`を`state_machine_type`で利用し、履歴Objectを乱立させない
 - ResearchPlan Lifecycle / Lock = FIX-011では新Objectを作らず、ResearchPlanの独立State Machineとして表現する
 - `EdgeHealthObject` = FIX-012では新設せず、Edge maturityはEdge Lifecycle、現在のKnowledge healthはKnowledgeLifecycleProfileで表す
@@ -4582,14 +4780,15 @@ COUNTERFACTUAL
 7. **成功State変更履歴はFIX-010で`StateTransitionEvent`へ正式化済み。FIX-013でRequest / Recommend / Approve / ApplyとState Machine別Apply Authorityを正式化。Atomic Write、Sequence uniqueness、CAS、Replay、Retention、IAM、Fast/Strict Pathの実装は `DATA_CONTRACT.md` / Processing / DB / Securityで固定する**
 8. **ResearchPlanはFIX-011でLifecycle State / Lock Stateの2軸へObject側も正式追従済み。Stateの正式語彙は`STATE_DICTIONARY.md`、Trial開始時FROZEN Gate・Plan Version binding・new T0・supersedes関係の型/CardinalityはResearch / Data / Processing Contractで固定する**
 9. **FIX-012でHypothesis / Edge Lifecycle・Knowledge Aging / Health・Production Promotion Stage・Risk Stateを完全分離。Gate順序、AGING / STALE / DEGRADED時のProduction Policy、PAUSED復帰条件、Cardinality、旧Field / State Migrationは `DATA_CONTRACT.md` / Production Contractで固定する**
-10. **ApprovalDecision ObjectはFIX-015で正式化する。FIX-013では`authorization_ref`で将来接続可能にする**
-11. Soft / Hard ContradictionのProduction Gate → Production Contract
-12. Risk Stateの閾値 → Risk Design / Research
-13. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
-14. Object間Cardinality → `DATA_CONTRACT.md` / `DATABASE_SCHEMA.md`
-15. Retention期間 → Storage Governance
-16. Encryption / Secret分類 → Security Design
-17. Schema Migration実装 → Version / Migration Design
+10. **FIX-014でSourceMetadata Retrieval Result・Source Lifecycle・Data Qualityを分離。retrieval_status型、Logical/Provider Source identity、Failure aggregation、Fallback、Recovery、Legacy status MigrationはData / Source / Monitoring Contractで固定する**
+11. **ApprovalDecision ObjectはFIX-015で正式化する。FIX-013では`authorization_ref`で将来接続可能にする**
+12. Soft / Hard ContradictionのProduction Gate → Production Contract
+13. Risk Stateの閾値 → Risk Design / Research
+14. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
+15. Object間Cardinality → `DATA_CONTRACT.md` / `DATABASE_SCHEMA.md`
+16. Retention期間 → Storage Governance
+17. Encryption / Secret分類 → Security Design
+18. Schema Migration実装 → Version / Migration Design
 
 ---
 
@@ -4643,4 +4842,17 @@ REQUEST
 ≠ APPLY
 ```
 
-何十年以上運用するため、Python・DB・Exchange・AI Providerが変わっても、Objectの意味・Version・Provenance・Research履歴・Trade判断履歴・State Transition履歴・Authority provenanceを失わない設計を優先する。
+FIX-014ではさらに:
+
+> **一回のSource取得結果・Source自体の現在Lifecycle・取得内容の品質を分離し、Provider障害を市場理解概念そのものの消失へ直結させない。**
+
+```text
+Retrieval Result
+≠ Source Lifecycle
+≠ Data Quality
+
+Logical Source
+≠ Provider Source
+```
+
+何十年以上運用するため、Python・DB・Exchange・AI Provider・Data Providerが変わっても、Objectの意味・Version・Provenance・Research履歴・Trade判断履歴・State Transition履歴・Authority provenanceを失わない設計を優先する。
