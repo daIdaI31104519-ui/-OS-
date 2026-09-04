@@ -1549,7 +1549,7 @@ Research CandidateをそのままProductionへ利用しない。
 
 ## Meaning
 
-何を、どのEvidence Channel・Dataset・評価基準で検証するかを事前定義する研究計画Object。
+何を、どのEvidence Channel・Dataset・評価基準で検証するかを事前定義するVersioned研究計画Object。FIX-011ではResearchPlanの進行状況と編集可否を一つのstatusへ混ぜず、Lifecycle StateとLock Stateの2軸で独立管理する。
 
 ## Owner
 
@@ -1559,6 +1559,8 @@ Research Orchestrator
 
 ```yaml
 research_plan_id:
+plan_version:
+
 research_candidate_ref:
 target_object_refs: []
 research_question:
@@ -1572,13 +1574,109 @@ completion_criteria:
 data_scope:
 holdout_policy:
 resource_budget_ref:
-plan_version:
+
+lifecycle_state:
+lifecycle_state_machine_version:
+lifecycle_latest_transition_event_ref:
+
+lock_state:
+lock_state_machine_version:
+lock_latest_transition_event_ref:
+
+pre_registered_at:
 frozen_at:
+
+supersedes_plan_ref:
+superseded_by_plan_ref:
+
+created_at:
+updated_at:
+```
+
+## FIX-011 State Separation
+
+```text
+ResearchPlan Identity / Version
+        ├→ ResearchPlan Lifecycle
+        │   DRAFT / READY / ACTIVE / COMPLETED / SUPERSEDED / CANCELLED
+        │
+        └→ ResearchPlan Lock State
+            EDITABLE / PRE_REGISTERED / FROZEN
+```
+
+Meaning:
+
+```text
+Lifecycle State
+= このPlan Versionの研究計画が今どの進行段階にあるか
+
+Lock State
+= このPlan Versionの評価規則・Data Scope・Metric・Stop Rule等をどの程度変更してよいか
+
+plan_version
+= 研究計画内容の世代
+```
+
+## StateTransitionEvent Relationship
+
+LifecycleとLockは別State Machineとして扱う。
+
+```text
+ResearchPlan Lifecycle transition
+→ StateTransitionEvent(state_machine_type = RESEARCH_PLAN_LIFECYCLE)
+
+ResearchPlan Lock transition
+→ StateTransitionEvent(state_machine_type = RESEARCH_PLAN_LOCK)
+```
+
+同一ResearchPlanに両方の履歴が存在できる。
+
+例:
+
+```text
+Lifecycle = ACTIVE
+Lock = FROZEN
+```
+
+は正常な組み合わせである。
+
+## Version / Freeze Rule
+
+`frozen_at`はLock Stateの正本ではなく、FROZENへ入った時刻を補助的に記録するTimestamp。
+
+```text
+lock_state = FROZEN
+= 編集可否のCurrent State
+
+frozen_at
+= Freeze時刻Metadata
+```
+
+FROZEN後に研究条件を意味変更する必要がある場合、同じPlan Versionを無言で上書きしない。
+
+```text
+Plan v3 = FROZEN
+↓ meaningful change required
+Plan v4 = DRAFT / EDITABLE
+↓
+PRE_REGISTERED / FROZEN
+↓
+新しいTrial / 必要なら新しいT0
 ```
 
 ## Invariants
 
-結果を見てから評価基準を都合よく書き換えない。変更時はPlan Versionを分ける。
+- Lifecycle StateとLock Stateを一つの`status`へ統合しない
+- `ACTIVE + FROZEN` は合法であり、LifecycleとLockを相互排他的に扱わない
+- `ACTIVE` だから研究条件を自由編集できるとは扱わない
+- `FROZEN` だからLifecycleもFROZENとは扱わない
+- `frozen_at`だけからLock Stateを推定しない
+- FROZEN Planの評価基準・Data Scope・Metric・Stop Rule等を結果を見てから都合よく上書きしない
+- FROZEN後のMeaningful Changeは新しい`plan_version`を作る
+- Lifecycle TransitionとLock Transitionは別`StateTransitionEvent`として履歴化する
+- `lifecycle_state_machine_version / lock_state_machine_version`を保持し、過去Planを当時のState定義で再現可能にする
+- `SUPERSEDED`になった旧Plan / Versionを削除せず、後続Trialの再現に利用できるよう保持する
+- Demo Forward / protected holdout等でどのLock Stateを開始条件に要求するかはResearch / Data / Processing Contractで正式化する
 
 ---
 
@@ -1586,7 +1684,7 @@ frozen_at:
 
 ## Meaning
 
-ResearchPlanに基づいて実行される一つの試行。
+特定ResearchPlan Versionに基づいて実行される一つの試行。FIX-011ではTrialが「どのPlan Version・どのLock状態を前提に開始されたか」を固定参照し、後から新しいPlan Versionで旧Trialを再解釈しない。
 
 ## Owner
 
@@ -1596,7 +1694,13 @@ Experimental Framework
 
 ```yaml
 trial_id:
-research_plan_id:
+research_plan_ref:
+research_plan_version:
+plan_lifecycle_state_at_start:
+plan_lifecycle_transition_ref:
+plan_lock_state_at_start:
+plan_lock_transition_ref:
+
 experiment_mode:
 evidence_source_channel:
 t0:
@@ -1609,11 +1713,39 @@ finished_at:
 status:
 ```
 
+## FIX-011 Plan Binding
+
+Trial開始時に使用したResearchPlanを、少なくとも概念上次で固定する。
+
+```text
+ResearchTrial
+→ exact ResearchPlan reference
+→ exact plan_version
+→ Lifecycle State at Trial start
+→ Lock State at Trial start
+→ corresponding StateTransitionEvent references
+```
+
+Planが後で更新・SUPERSEDEDされても、既存TrialのPlan bindingを新Versionへ差し替えない。
+
+Protected Research Modeでは後続Contractで例として:
+
+```text
+experiment_mode = DEMO_FORWARD
+→ plan_lock_state_at_start must be FROZEN
+```
+
+等のHard Gateを定義可能にする。
+
 ## Invariants
 
 - Demo ForwardではT0以降だけを評価する
-- Rule変更時は同じTrialを上書きせず新Version / T0を作る
+- Rule変更時は同じTrialを上書きせず、新Plan Version / 新Trial / 必要なら新T0を作る
 - Trial数とUnique Market Event数を分離する
+- Trialが使用した`research_plan_version`を後から書き換えない
+- 旧Trialを新しいResearchPlan Versionの結果として再解釈しない
+- `plan_lock_state_at_start` はTrial開始時のSnapshotであり、後からPlanのCurrent Lock Stateが変わっても書き換えない
+- LifecycleとLockのStateTransitionEvent参照を混同しない
 
 ---
 
@@ -3539,6 +3671,8 @@ MarketContext ≠ MarketDNA
 MarketDNA ≠ FeaturePriorityProfile
 CauseCandidate ≠ CausalHypothesis
 CausalHypothesis ≠ Edge
+ResearchPlan Lifecycle State ≠ ResearchPlan Lock State
+ResearchPlan Version ≠ ResearchPlan Lifecycle State ≠ ResearchPlan Lock State
 ResearchResult ≠ EvidencePackage
 HypothesisPoolEntry ≠ ApplicableHypothesisSet
 ApplicableHypothesisSet ≠ TradeThesis
@@ -3582,6 +3716,14 @@ Current State
 ≠ AuditEvent
 ```
 
+FIX-011では次を固定する。
+
+```text
+ResearchPlan Version
+≠ ResearchPlan Lifecycle State
+≠ ResearchPlan Lock State
+```
+
 ---
 
 # 13. ObjectをTop-Level Layerへ昇格させない原則
@@ -3610,6 +3752,8 @@ EntryThesis / ProductionEvidenceの生成処理はFIX-009でExecution Domain内�
 
 StateTransitionEventはFIX-010でOS横断Objectとして正式化するが、`State Transition Layer`のような新Top-Level Layerは作らない。
 
+ResearchPlanのLifecycle / LockはFIX-011で二つのState Machineとして扱うが、各Stateを別Object / 別Top-Level Layerへ昇格させない。
+
 ---
 
 # 14. Object追加Gate
@@ -3630,6 +3774,8 @@ StateTransitionEventはFIX-010でOS横断Objectとして正式化するが、`St
 独立ID / Lifecycle / Version / Ownerが不要なら、新Objectを増やさない。
 
 FIX-010のStateTransitionEventは、異なるState Machineを横断して独立ID・時系列・Version・Authority provenance・Replay価値を持つため、独立Persistent Objectとして正式化する。
+
+FIX-011ではResearchPlan Lifecycle / Lockのために新しいState Objectを増やさず、既存ResearchPlan + StateTransitionEventで表現する。
 
 ---
 
@@ -3664,6 +3810,15 @@ Stateの正式語彙・遷移は後続の:
 FIX-010以降、成功したState変更履歴の共通Semantic Objectは`OBJ-STATE-001: StateTransitionEvent`を使用する。
 
 各State Machine専用の重複History Objectを無秩序に増やさない。
+
+FIX-011ではResearchPlanが同時に二つのState Machineを持つことをObject側へ正式接続する。
+
+```text
+STATE-RSCH-002   = ResearchPlan Lifecycle
+STATE-RSCH-002-L = ResearchPlan Lock State
+```
+
+両State MachineのCurrent State / Version / latest transition referenceを混同しない。
 
 ---
 
@@ -3721,6 +3876,21 @@ AuditEventとの関連Cardinality
 Manual Override authorization reference
 ```
 
+FIX-011で決めた次もResearch / Data / Processing Contractで固定する。
+
+```text
+ResearchPlan lifecycle_state / lock_state required / nullable rule
+Lifecycle / Lock state_machine_type namespace
+Lifecycle / Lock transition atomicity and latest reference consistency
+ResearchPlan Version identity / supersedes cardinality
+FROZEN後のMeaningful Change判定
+ResearchTrial → exact ResearchPlan Version binding
+plan_lock_state_at_start / plan_lifecycle_state_at_start snapshot rule
+DEMO_FORWARD / protected holdout開始時のFROZEN hard gate
+Plan Version変更時のnew T0 requirement
+旧Trialを新Plan Versionへ再帰属させない制約
+```
+
 ---
 
 # 18. ObjectとDATABASE_SCHEMAの関係
@@ -3742,6 +3912,8 @@ evidence_links table
 のように分割される可能性がある。
 
 StateTransitionEventもSemantic Objectとしては1つだが、DBではCurrent Projection TableとTransition History Tableへ分かれる可能性がある。
+
+ResearchPlanもLogical Objectとしては1つだが、Plan Version / Current Lifecycle / Current Lock / Transition Historyを物理的にどう保存するかはDB Schemaで決める。
 
 DB Schemaは後からStorage効率・Query・Migrationを考えて決める。
 
@@ -3803,6 +3975,8 @@ Important Hypothesis / Failure / Trade / Knowledge
 ```
 
 EntryThesis / ProductionEvidence / ExecutionRecord / TradeResult / StateTransitionEventは監査・研究・再構築価値が高いため長期Immutable保存候補。
+
+FROZEN / SUPERSEDED ResearchPlan Versionと、それに紐づくResearchTrialも研究再現性のため長期保存候補。
 
 具体的保存期間は `STORAGE.md` / Long-Term Governanceで決める。
 
@@ -4014,6 +4188,8 @@ StateTransitionAttempt
 HypothesisStateHistory
 RiskStateHistory
 RuntimeStateHistory
+ResearchPlanLifecycleObject
+ResearchPlanLockObject
 ```
 
 理由:
@@ -4023,6 +4199,7 @@ RuntimeStateHistory
 - `ENTRY_SNAPSHOT_NOT_BUILDABLE` = FIX-009時点ではEntryThesisとは別Objectを新設せず、Entry Snapshot BuilderのDiagnostics / Processing Contract上のHard Gate非成立結果として扱う
 - `StateTransitionAttempt` = FIX-010では拒否・失敗Attempt専用Objectを増やさずAuditEvent / Diagnostics等で扱う
 - 個別State History名 = 共通`StateTransitionEvent`を`state_machine_type`で利用し、履歴Objectを乱立させない
+- ResearchPlan Lifecycle / Lock = FIX-011では新Objectを作らず、ResearchPlanの独立State Machineとして表現する
 
 また:
 
@@ -4053,13 +4230,14 @@ COUNTERFACTUAL
 5. **ApplicableHypothesisSet / TradeThesisのCanonical生成責任はFIX-008でProduction Thesis Builderへ確定済み。Builder Input Contract、Selection Cardinality、Builder Version型、`THESIS_NOT_BUILDABLE`表現、Set→Thesis→Signal受け渡しは `DATA_CONTRACT.md` / Processing / Trade Thesis Contractで固定する**
 6. **EntryThesis / ProductionEvidence生成責任はFIX-009で確定済み。Entry Snapshot hard gate、OrderIntent必須参照、時系列制約、Live Evidence completeness、ExecutionRecordとのCardinality、Logger Custody / Post-Trade read-only境界は `DATA_CONTRACT.md` / Processing Contractで固定する**
 7. **成功State変更履歴はFIX-010で`StateTransitionEvent`へ正式化済み。Authority最終割当、Atomic Write、Sequence uniqueness、CAS、Replay、Retention、AuditEvent関連は `AUTHORITY MATRIX` / `DATA_CONTRACT.md` / Processing / DB Schemaで固定する**
-8. Soft / Hard ContradictionのProduction Gate → Production Contract
-9. Risk Stateの閾値 → Risk Design / Research
-10. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
-11. Object間Cardinality → `DATA_CONTRACT.md` / `DATABASE_SCHEMA.md`
-12. Retention期間 → Storage Governance
-13. Encryption / Secret分類 → Security Design
-14. Schema Migration実装 → Version / Migration Design
+8. **ResearchPlanはFIX-011でLifecycle State / Lock Stateの2軸へObject側も正式追従済み。Stateの正式語彙は`STATE_DICTIONARY.md`、Trial開始時FROZEN Gate・Plan Version binding・new T0・supersedes関係の型/CardinalityはResearch / Data / Processing Contractで固定する**
+9. Soft / Hard ContradictionのProduction Gate → Production Contract
+10. Risk Stateの閾値 → Risk Design / Research
+11. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
+12. Object間Cardinality → `DATA_CONTRACT.md` / `DATABASE_SCHEMA.md`
+13. Retention期間 → Storage Governance
+14. Encryption / Secret分類 → Security Design
+15. Schema Migration実装 → Version / Migration Design
 
 ---
 
@@ -4086,5 +4264,9 @@ FIX-009ではさらに:
 FIX-010ではさらに:
 
 > **Current Stateは現在値のProjectionであり、StateTransitionEventは実際に適用された遷移のImmutable Historical Factである。**
+
+FIX-011ではさらに:
+
+> **ResearchPlan Version・Lifecycle State・Lock Stateは別軸であり、ResearchTrialは実行時に使用したPlan VersionとLock条件を固定参照する。**
 
 何十年以上運用するため、Python・DB・Exchange・AI Providerが変わっても、Objectの意味・Version・Provenance・Research履歴・Trade判断履歴・State Transition履歴を失わない設計を優先する。
