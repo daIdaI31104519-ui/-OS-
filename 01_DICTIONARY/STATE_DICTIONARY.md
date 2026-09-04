@@ -365,6 +365,31 @@ Recovery / Permission Expansion / Risk Expansion
 
 Restrictive Authorityが単独で安全側・権限拡大側へ自動復帰させない。
 
+## RULE-STATE-014: Retrieval ResultとSource Lifecycleを分離する
+
+FIX-014以降、Source取得一回ごとの結果をSource Lifecycle Stateそのものとして扱わない。
+
+```text
+SourceMetadata.retrieval_status
+= one retrieval / receive result
+
+STATE-SRC-001
+= Logical Source / Provider SourceのCurrent Lifecycle
+
+STATE-DQ-001
+= 取得されたData内容のQuality
+```
+
+正式原則:
+
+```text
+Retrieval Result
+≠ Source Lifecycle
+≠ Data Quality State
+```
+
+一回の失敗・成功を、StateTransitionEventなしにCurrent Source State変更として扱わない。
+
 ---
 
 # 6. State分類
@@ -1493,12 +1518,18 @@ manual_escalation
 
 # STATE-SRC-001: Source Lifecycle / Availability State
 
+## Meaning
+
+Logical SourceまたはProvider Sourceについて、OSが現在そのSourceをどの運用・Governance状態として扱っているかを表すSource-level Current State Machine。
+
+FIX-014以降、個々のRequest / WebSocket Message / Fetchの成功・失敗を表すState Machineではない。
+
 対象:
 
 - Logical Source
 - Provider Source
 
-候補State:
+正式候補State:
 
 ```text
 ACTIVE
@@ -1510,21 +1541,170 @@ RETIRED
 UNKNOWN
 ```
 
+## ACTIVE
+
+現在のSource Policy / Health条件を満たし、通常Sourceとして利用可能。
+
+`SourceMetadata.retrieval_status = SUCCESS`一回だけを理由にACTIVEへ遷移しない。
+
+## DEGRADED
+
+Source-levelで継続的または意味のある劣化が確認され、通常より信頼・利用範囲を制限すべき状態。
+
+候補材料:
+
+- repeated timeout / failure
+- sustained latency deterioration
+- repeated rate limit saturation
+- recurring schema mismatch
+- coverage degradation
+- provider health degradation
+
+具体的回数・時間窓・閾値はSource / Monitoring ContractでVersion管理する。
+
+## UNAVAILABLE
+
+現在そのSourceを利用できない、または安全に依存できない状態。
+
+単発Request失敗だけで自動UNAVAILABLEへ確定しない。ただしProvider outage等のHard TriggerはRestrictive Fast Path候補になり得る。
+
 ## FALLBACK
 
-Primary Source不調時に代替Providerを利用中。
+Primary Provider不調・停止・移行等により、代替ProviderをSourceとして利用している状態。
 
-Logical SourceとProviderを分離する。
+Logical SourceとProvider Sourceを分離する。
 
 例:
 
 ```text
-OPEN_INTEREST = ACTIVE
+OPEN_INTEREST logical source = ACTIVE
 Provider A = UNAVAILABLE
 Provider B = FALLBACK
 ```
 
-Source Provider終了でMarket理解概念そのものを失わない。
+この場合、Provider Aの障害だけで`OPEN_INTEREST`という市場理解概念自体をUNAVAILABLE / RETIREDへしない。
+
+## DEPRECATED
+
+Source / Providerはまだ利用可能な場合があるが、将来利用停止・置換予定として新規依存を減らす状態。
+
+```text
+Source Lifecycle = DEPRECATED
+retrieval_status = SUCCESS
+```
+
+は成立する。
+
+## RETIRED
+
+Source / Providerを正式利用対象から退役した状態。Historical provenance /過去Rawとの参照は保持する。
+
+## UNKNOWN
+
+Source-level Current Stateを十分判定できない状態。UNKNOWNをACTIVEへ都合よく読み替えない。
+
+## FIX-014 Retrieval Boundary
+
+```text
+SourceMetadata.retrieval_status
+= 一回の取得・受信結果
+
+Source Lifecycle
+= Source自体のCurrent State
+
+Data Quality
+= 取得内容の信頼性
+```
+
+したがって次はすべて成立する。
+
+```text
+Source Lifecycle = ACTIVE
+retrieval_status = TIMEOUT
+```
+
+```text
+Source Lifecycle = DEGRADED
+retrieval_status = SUCCESS
+Data Quality = HEALTHY
+```
+
+```text
+Source Lifecycle = ACTIVE
+retrieval_status = SUCCESS
+Data Quality = DEGRADED
+```
+
+## Lifecycle Transition Input
+
+Source Lifecycle変更は、必要に応じて複数の事実を集約して判断する。
+
+候補:
+
+```text
+SourceMetadata retrieval history
+Monitoring result
+Provider health
+Error / timeout rate
+Latency trend
+Schema compatibility
+Coverage
+Fallback health
+Provider retirement notice
+```
+
+一つのSourceMetadataがLifecycle変更材料になることはあるが、SourceMetadata自体をStateTransitionEventとみなさない。
+
+## FIX-013 Authority Flow
+
+```text
+Source Adapter / Collector / Monitoring
+→ REQUEST / evidence
+↓
+Source Lifecycle Governance
+→ RECOMMEND
+↓
+Source Lifecycle Governance
+→ APPROVE
+↓
+Source Lifecycle Controller
+→ APPLY
+↓
+StateTransitionEvent
+```
+
+Source Adapter / Collectorが直接Current Source Lifecycleを書き換えない。
+
+## Recovery Rule
+
+Source RecoveryはRestrictive Transitionより厳しく扱う。
+
+```text
+UNAVAILABLE / DEGRADED
+→ ACTIVE
+```
+
+候補要件:
+
+- repeated successful retrievals
+- latency normalization
+- schema compatibility confirmed
+- coverage restored
+- provider health restored
+- cooldown / persistence satisfied
+- required approval
+
+一回の`retrieval_status = SUCCESS`だけでACTIVEへ戻さない。
+
+## Invariants
+
+- `Retrieval Result ≠ Source Lifecycle ≠ Data Quality State`
+- Logical SourceとProvider Sourceを同一Lifecycleへ潰さない
+- 一回のRequest failureだけでDEGRADED / UNAVAILABLEを自動確定しない
+- 一回のRequest successだけでACTIVEへ自動Recoveryしない
+- SourceMetadataのHistorical RecordをCurrent Lifecycle変更に合わせて書き換えない
+- Source Lifecycle変更だけをStateTransitionEventとして履歴化し、同Stateの個々のRequest成功/失敗ごとに`ACTIVE → ACTIVE`等の無意味なTransition Eventを量産しない
+- Provider終了でMarket理解概念そのものを失わない
 
 ---
 
@@ -1565,6 +1745,13 @@ UNKNOWN
 品質評価自体が十分できない。
 
 Qualityは単一Stateだけでなく、Missing / Freshness / Latency / Consistency等の元Dimensionを保持する。
+
+FIX-014以降、Retrievalが成功したことだけを理由にData QualityをHEALTHYへ確定しない。
+
+```text
+retrieval_status = SUCCESS
+≠ Data Quality = HEALTHY
+```
 
 ---
 
@@ -1774,7 +1961,7 @@ Request Authority
 | System Health | Monitoring probes / subsystem diagnostics | Monitoring | Monitoring Policy | Health Controller |
 | Incident | Monitoring / Runtime / Recovery | Failure / Recovery Governance | Failure / Recovery Governance | Incident Controller |
 | Recovery Action | Incident / Runtime / Human | Recovery | Recovery Policy / Authority | Recovery Controller |
-| Source Lifecycle | Adapter / Monitoring | Source Lifecycle Governance | Source Lifecycle Governance | Source Lifecycle Controller |
+| Source Lifecycle | Source Adapter / Collector / Monitoring | Source Lifecycle Governance | Source Lifecycle Governance | Source Lifecycle Controller |
 | Data Quality | Data Quality checks / Monitoring | Data Quality | Data Quality Policy | Data Quality Controller |
 | Storage Lifecycle | Resource / Storage Monitoring | Storage Governance | Storage Governance | Storage Controller |
 | Backup Lifecycle | Operations / Scheduler | Backup Governance | Backup Governance | Backup Controller |
@@ -1782,6 +1969,8 @@ Request Authority
 | Deployment Stage | Development / Operations | Validation / CI | Deployment / Release Control | Deployment Controller |
 
 このMatrixはSemantic Responsibilityの正本候補であり、実装上のClass名・Process名・IAM設定は後続Contract / Python / Security設計で決める。
+
+Source Lifecycle行のSource Adapter / Collectorは、per-retrieval結果・Diagnostics・Request材料を提供できるが、Apply Authorityではない。
 
 ## 13.4 Shared State Transition Engine
 
@@ -1826,6 +2015,8 @@ Audit / Trace
 
 を省略しない。
 
+FIX-014ではSource Fast Pathも「一回のTIMEOUT」ではなく、Provider outage等の明示Hard Trigger / Policy条件を要求する。
+
 ## 13.6 Recovery / Permission Expansion Strict Path
 
 次のような安全側・権限拡大側TransitionはRestrictive Fast Pathより厳しく扱う。
@@ -1850,6 +2041,8 @@ Current State再確認
 ```
 
 Restrictive Authorityが単独でRisk / Permissionを元へ戻してはならない。
+
+FIX-014ではSource Recovery時に一回のRetrieval SUCCESSだけで復帰確認を完了しない。
 
 ## 13.7 Human / Telegram
 
@@ -1927,6 +2120,8 @@ EMERGENCY → NORMAL
 
 FIX-013以降、この非対称性はAuthorityにも適用する。
 
+FIX-014ではSource Lifecycleも同様に、明示Hard Triggerによる制限側遷移と、複数確認を要求するRecoveryを非対称に扱う。
+
 ---
 
 # 15. Hard TriggerとSoft Trigger
@@ -1942,6 +2137,7 @@ FIX-013以降、この非対称性はAuthorityにも適用する。
 - Critical Data corruption
 - Hard Constraint violation
 - Emergency Risk Limit breach
+- Explicit Provider outage / source shutdown signal
 
 ## Soft Trigger
 
@@ -1953,6 +2149,7 @@ Persistence /複数Evidence / Cooldown等を確認して遷移する条件。
 - Contradiction増加
 - Market Novelty増加
 - Data freshness軽度低下
+- Repeated Source timeout / latency degradation
 
 この区別により、過敏なState反転とSafety遅延の両方を防ぐ。
 
@@ -1980,6 +2177,7 @@ hard_trigger_override:
 - Health State
 - Knowledge Aging / Health
 - Data Quality
+- Source Lifecycle
 
 Hysteresis Ruleを変更しても過去Transitionを新Ruleで再解釈せず、State Machine / Policy Versionから当時の条件を追跡できるようにする。
 
@@ -2050,20 +2248,24 @@ State TransitionはBackward ProvenanceだけでなくForward Impactを追跡可�
 例:
 
 ```text
-Source = UNAVAILABLE
+Source Provider A = UNAVAILABLE
 ↓
-Feature Quality = DEGRADED
+Logical Source = FALLBACK / ACTIVE via Provider B
 ↓
-Hypothesis Applicability低下
+Feature Quality impact評価
+↓
+Hypothesis Applicability影響
 ↓
 Trade Thesis影響
 ↓
-Risk = RISK_REDUCED
+必要ならRisk = RISK_REDUCED
 ```
 
 各成功State Transitionに`trace_id / trigger_refs / previous_transition_event_ref`等を持たせ、後から順序と影響を追えるようにする。
 
 FIX-013以降、重要TransitionではRequest / Recommendation / Approval / Apply provenanceも追跡可能にする。
+
+FIX-014ではSourceMetadata retrieval historyとSource Lifecycle StateTransitionEventを同じ履歴として混ぜず、必要なTraceだけ接続する。
 
 将来のDependency / Impact Contractで正式化する。
 
@@ -2090,6 +2292,8 @@ FIX-012では、最近のDemo / Live劣化を研究成熟度へ直接混ぜず�
 
 StateTransitionEventの`trigger_refs`から、State変更を起こしたEvidencePackage / ResearchResult / ProductionEvidence等へ遡れることを目標とする。
 
+Source Lifecycleでは必要に応じて複数SourceMetadata / Monitoring Resultを`trigger_refs`へ関連付け、一回のRetrieval結果だけにLifecycle意味を持たせない。
+
 ---
 
 # 21. State変更とKnowledge化
@@ -2106,6 +2310,11 @@ NORMAL_LIVE → PAUSED
 ```text
 RUNNING → ERROR → RECOVERY → RUNNING
 原因: Source timeout
+```
+
+```text
+Provider A ACTIVE → UNAVAILABLE
+原因: repeated timeout / provider outage
 ```
 
 これらのStateTransitionEventを後から、
@@ -2137,6 +2346,7 @@ State履歴そのものを消さず、Knowledgeは履歴を参照する。
 8. 禁止遷移を定義できるか？
 9. 長期維持価値があるか？
 10. FIX-012の別State軸の責任を侵食していないか？
+11. FIX-014のper-retrieval結果をSource Stateとして誤追加していないか？
 ```
 
 満たさない場合、新Stateを増やさない。
@@ -2159,12 +2369,15 @@ State名・意味・遷移を変更する場合、`DESIGN_CHANGE_RULES.md` に�
 - Runtime State意味変更
 - Apply Authority変更
 - Emergency Fast Path権限変更
+- Source LifecycleとRetrieval Resultの責任統合
 
 これらは既存DB / Python Enum / Test / Monitoring / Telegram / Analytics / StateTransitionEvent解釈へ影響するため、Impact Analysisを必須候補とする。
 
 State Machine Version変更時も過去StateTransitionEventを新Versionの意味で無言に書き換えない。
 
 FIX-012の旧StateはMigration Mappingを残し、過去履歴を物理削除しない。
+
+FIX-014以前の`SourceMetadata.status`を、現在のSource Lifecycle Stateへ無言で変換して過去Recordを上書きしない。
 
 ---
 
@@ -2209,6 +2422,15 @@ AND Risk State
 を別々に確認する。
 
 FIX-013以降、各ModuleがCurrent Stateを直接更新する実装を避け、Apply Authority / State Transition Engine経由へ統一する。
+
+FIX-014以降、次のような直結を新規実装しない。
+
+```python
+if source_metadata.retrieval_status == "TIMEOUT":
+    source.current_state = "DEGRADED"
+```
+
+Retrieval EventはLifecycle Transition材料として集約・評価し、正式Authority Flowを通す。
 
 ---
 
@@ -2277,6 +2499,8 @@ PRODUCTION_PROMOTION
 
 FIX-013ではDBへ直接書き込めるRole / Serviceを無制限に増やさず、State MachineごとのApply Authority / write pathを一意にできる設計を優先する。
 
+FIX-014では`SourceMetadata.retrieval_status`とSource Lifecycle Current Projectionを一つの`status`列へ圧縮しない。
+
 正式Table名・Index・Transaction方式は `DATABASE_SCHEMA.md` で確定する。
 
 ---
@@ -2307,7 +2531,19 @@ Risk: CAUTION
 
 のように軸を分けて表示する。
 
-異なるState Machineを一つの `SYSTEM_STATUS = BAD` や `status = ACTIVE` へ潰さない。
+FIX-014対象Sourceでは必要に応じて:
+
+```text
+Logical Source: OPEN_INTEREST = ACTIVE
+Provider A: UNAVAILABLE
+Provider B: FALLBACK
+Last Retrieval: SUCCESS
+Data Quality: HEALTHY
+```
+
+のようにLifecycle / Retrieval / Qualityを分けて表示する。
+
+異なるState MachineやRetrieval結果を一つの `SYSTEM_STATUS = BAD` / `source_status = BAD` へ潰さない。
 
 必要時にはCurrent Stateだけでなく、直近`StateTransitionEvent`の変更時刻・Reason Code・Authority provenanceを表示可能にする。
 
@@ -2327,6 +2563,7 @@ Risk: CAUTION
 - 新VersionのState意味で過去履歴を自動書き換えない
 - Current Projectionが壊れてもTransition Historyから再構築可能な設計を維持する
 - Authority Matrix / Apply Authority変更もVersion / Audit対象にする
+- Provider変更後もLogical Source概念とHistorical SourceMetadata provenanceを保持する
 
 FIX-012以前の:
 
@@ -2337,6 +2574,8 @@ Knowledge SUSPENDED
 ```
 
 も旧State Machine Versionとして履歴を保存し、新定義へ無言で書き換えない。
+
+FIX-014以前のSourceMetadata `status`も旧Schemaの意味を保持し、新しいSource Lifecycleへ推測で再解釈して過去Recordを書き換えない。
 
 ---
 
@@ -2372,6 +2611,14 @@ StateまたはState Machineを正式化するには最低限:
 □ Long-Term Migration方針
 ```
 
+Source Lifecycleでは追加で:
+
+```text
+□ per-retrieval結果とLifecycleを分離している
+□ Logical Source / Provider Sourceを区別している
+□ Recovery確認条件が単発成功に依存していない
+```
+
 を確認する。
 
 ---
@@ -2391,6 +2638,9 @@ Production Promotion再開条件
 Health Stateの数値閾値
 Position Supervisor Hysteresisの具体時間
 Retry回数 / Backoff時間
+Source DEGRADED / UNAVAILABLEの具体的Request失敗率・集約時間窓
+Source Recoveryの具体的連続成功回数・Cooldown
+Fallback選択 / Primary復帰Policy
 Storage Retention期間
 Backup頻度
 StateTransitionEventの物理Table / Index / Partition
@@ -2458,6 +2708,9 @@ STOPPED → BOOTING → RUNNING
                     └→ ERROR → RECOVERY
 RUNNING / DEGRADED → STOPPING → STOPPED
 
+Source Lifecycle:
+ACTIVE / DEGRADED / UNAVAILABLE / FALLBACK / DEPRECATED / RETIRED / UNKNOWN
+
 Incident:
 DETECTED → CLASSIFYING → CONTAINED → MITIGATING → RECOVERING → RESOLVED → MONITORING → CLOSED
 ```
@@ -2471,6 +2724,8 @@ REQUEST → RECOMMEND → APPROVE → APPLY → StateTransitionEvent
 ```
 
 へ分離する。
+
+Source取得結果はこのState一覧へ混ぜず、`SourceMetadata.retrieval_status`として別管理する。
 
 ---
 
@@ -2524,15 +2779,28 @@ Recovery / Risk Expansion / Permission Expansion
 
 とする。
 
+FIX-014ではさらに:
+
+```text
+Retrieval Result
+≠ Source Lifecycle
+≠ Data Quality State
+
+Logical Source
+≠ Provider Source
+```
+
+を正式に分離する。
+
 これにより市場理解OSは、数年後・数十年後でも、
 
 ```text
-「誰がState変更を要求した？」
-「誰がEvidenceを見て推奨した？」
-「誰が承認した？」
-「誰が実際に書き込んだ？」
-「なぜEmergencyへ落とした？」
-「なぜ復帰を許可した？」
+「このRequestだけ失敗したのか？」
+「Provider自体が現在使えないのか？」
+「Logical Source全体が利用不能なのか？」
+「取得には成功したがData Qualityが悪いのか？」
+「Fallback ProviderでLogical Sourceを維持できたのか？」
+「誰がSource State変更を承認・Applyしたのか？」
 ```
 
 まで再現可能にする。
