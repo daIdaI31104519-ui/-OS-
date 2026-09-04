@@ -119,6 +119,19 @@ Runtime
 Position Supervisor
 ```
 
+## StateTransitionEvent
+
+Stateそのものではなく、State Machineで実際に成功・適用された一回の遷移事実を保存するImmutable Object。
+
+正式Object定義は:
+
+```text
+01_DICTIONARY/OBJECT_DICTIONARY.md
+OBJ-STATE-001: StateTransitionEvent
+```
+
+を参照する。
+
 ---
 
 # 3. State Machine共通Metadata
@@ -133,6 +146,7 @@ current_state:
 previous_state:
 state_entered_at:
 state_changed_at:
+latest_transition_event_ref:
 trigger_refs: []
 reason_codes: []
 changed_by_role:
@@ -146,36 +160,38 @@ manual_override_ref:
 
 Data Contract / DB Schemaで、
 
-- Object本体に現在Stateを保持する
-- StateTransitionEventを別保存する
+- Object本体またはCurrent State Projectionに現在Stateを保持する
+- 成功したState変更ごとに`StateTransitionEvent`をImmutable保存する
 
-等の方式を正式化する。
+方式を正式化する。
+
+`current_state`等のProjectionは高速参照用であり、過去Transition Historyの代替ではない。
 
 ---
 
 # 4. Current StateとState Historyを分離する
 
-推奨:
+FIX-010で次を正式化する。
 
 ```text
 Current State
-= 現在の高速参照用Projection
+= 現在の高速参照用Projection / Cache
 
-State Transition History
-= 過去の変更事実を保存するImmutable履歴
+StateTransitionEvent
+= 過去に実際に成功・適用されたState変更事実を保存するImmutable履歴
 ```
 
 例:
 
 ```text
 H-101 current_state = ACTIVE
+latest_transition_event_ref = STE-0004
 
 History:
-DRAFT
-→ RESEARCHING
-→ SUPPORTED
-→ APPROVED
-→ ACTIVE
+STE-0001 DRAFT → RESEARCHING
+STE-0002 RESEARCHING → SUPPORTED
+STE-0003 SUPPORTED → APPROVED
+STE-0004 APPROVED → ACTIVE
 ```
 
 Current Stateだけを上書きして過去履歴を失わない。
@@ -187,9 +203,15 @@ State履歴は、将来次を説明できること。
 なぜ変わった？
 何がTriggerだった？
 どのEvidence / Error / Decisionが原因？
-誰 / どのRoleが変更した？
+誰がRequestした？
+誰 / どのRoleがAuthorizeした？
+誰 / どのRoleが実際にApplyした？
 どのState Machine Versionだった？
+Manual Overrideだった？
+一つ前のTransitionは何だった？
 ```
+
+原則として、正当な`StateTransitionEvent`を`transition_sequence`順にReplayすることでCurrent Stateを再構築可能な設計を目標とする。
 
 ---
 
@@ -209,6 +231,16 @@ changed_by
 ```
 
 を追跡可能にする。
+
+`trigger_refs` と `reason_codes` は意味を分ける。
+
+```text
+trigger_refs
+= 何が遷移の起点になったか
+
+reason_codes
+= なぜその遷移を適用したか
+```
 
 ## RULE-STATE-002: 不正な飛び越し遷移を禁止する
 
@@ -238,6 +270,55 @@ DRAFT → NORMAL_LIVE
 
 遷移ルール変更時に、過去State履歴を新Ruleで勝手に再解釈しない。
 
+成功Transitionは当時の`state_machine_version`をStateTransitionEventへ保存する。
+
+## RULE-STATE-007: 成功TransitionだけをStateTransitionEvent化する
+
+Authority Check / Transition Rule Check / Precondition Checkで拒否されたRequestは、成功State Transitionではない。
+
+```text
+Rejected / Failed Transition Attempt
+≠ StateTransitionEvent
+```
+
+拒否・失敗はAuditEvent / Diagnostics / ApprovalDecision候補で追跡する。
+
+## RULE-STATE-008: StateTransitionEventはImmutable
+
+過去のTransition判断が後から誤りと判明しても、既存Eventを削除・書き換えない。
+
+必要なら新しい合法Transition、Correction / Superseded関係、Reopen等で履歴を追加する。
+
+## RULE-STATE-009: Concurrent / Stale State Writeを防止する
+
+Transition適用時には、少なくとも概念上:
+
+```text
+expected_previous_state
+```
+
+と実Current Stateの一致を検証できるようにする。
+
+例:
+
+```text
+Process A reads ACTIVE
+Process B reads ACTIVE
+
+A applies ACTIVE → SUSPENDED
+B later tries ACTIVE → RETIRED
+```
+
+BはCurrentが既にSUSPENDEDなら古いACTIVE前提のTransitionとして拒否できること。
+
+具体的Compare-And-Set / Transaction方式はData / Processing Contract / DB Schemaで固定する。
+
+## RULE-STATE-010: transition_sequenceで順序を確定可能にする
+
+同一Target / State Machine内でTransition履歴の順序を一意に追跡可能にする。
+
+Timestampだけに依存して遷移順序を曖昧にしない。
+
 ---
 
 # 6. State分類
@@ -258,6 +339,8 @@ J. DEPLOYMENT
 ```
 
 Git / Designの `IDEA / PROPOSAL / CANONICAL` 等は `GIT_RULES.md` を正本とし、本書では重複定義しない。
+
+すべての主要State Machineは、成功遷移履歴に共通`StateTransitionEvent`を利用できる。個別の`HypothesisStateHistory` / `RiskStateHistory` / `RuntimeStateHistory`等を理由なく増殖させない。
 
 ---
 
@@ -1536,7 +1619,7 @@ Hypothesis = DEMO_FORWARD
 
 Stateは誰でも自由に書き換えられるものではない。
 
-正式Authorityは後続Contractで確定するが、責任候補を次とする。
+正式Authorityは後続Contract / FIX-013 Authority Matrixで確定するが、責任候補を次とする。
 
 | State Machine | Primary Authority |
 |---|---|
@@ -1565,6 +1648,19 @@ Stateは誰でも自由に書き換えられるものではない。
 - RuntimeがHypothesisをAPPROVEDへ変更しない
 - TelegramがState DBを直接書き換えない
 - AI ReviewがProduction Promotionを直接昇格しない
+- LoggerがState Authorityにならない
+
+FIX-010ではAuthorityを一人へ最終確定するのではなく、成功Transitionごとに:
+
+```yaml
+requested_by_role:
+authorized_by_role:
+applied_by_role:
+```
+
+をStateTransitionEventへ残せることを固定する。
+
+Authorityの最終一意性・Request / Recommend / Approve / Applyの責任分離はFIX-013で確定する。
 
 ---
 
@@ -1596,6 +1692,8 @@ EMERGENCY → NORMAL
 
 は原則一発復帰させない。
 
+どちらの成功TransitionもStateTransitionEventとして記録し、回復の方が慎重であることを履歴から確認できるようにする。
+
 ---
 
 # 15. Hard TriggerとSoft Trigger
@@ -1625,6 +1723,8 @@ Persistence /複数Evidence / Cooldown等を確認して遷移する条件。
 
 この区別により、過敏なState反転とSafety遅延の両方を防ぐ。
 
+StateTransitionEventにはHard / Soft判定の根拠となったTrigger / Reasonを参照可能にする。
+
 ---
 
 # 16. State Hysteresis共通設計
@@ -1647,6 +1747,8 @@ hard_trigger_override:
 - Health State
 - Edge Health
 - Data Quality
+
+Hysteresis Ruleを変更しても過去Transitionを新Ruleで再解釈せず、State Machine / Policy Versionから当時の条件を追跡できるようにする。
 
 ---
 
@@ -1672,6 +1774,18 @@ confirmation_ref:
 
 Manual Overrideによって元Evidence / Failureを消さない。
 
+Manual Overrideが実際にState変更へ成功した場合、そのStateTransitionEventには:
+
+```yaml
+manual_override_ref:
+authorization_ref:
+requested_by_actor:
+```
+
+を残し、自動遷移と人間Overrideを区別する。
+
+Override要求が拒否された場合は成功StateTransitionEventを生成しない。
+
 ---
 
 # 18. StateとMarket Eventの関係
@@ -1688,7 +1802,9 @@ Liquidity Collapse Event
 └→ Research Candidate = NEW
 ```
 
-すべてに同じMarket Event ID / Trigger Refを関連付けることで、後から影響を追跡可能にする。
+すべての成功Transitionに同じMarket Event ID / Trigger Refを関連付けることで、後から影響を追跡可能にする。
+
+ただし一つのMarketEventから複数StateTransitionEventが生成され得るため、MarketEventとStateTransitionEventを同一Objectにしない。
 
 ---
 
@@ -1709,6 +1825,8 @@ Trade Thesis影響
 ↓
 Risk = RISK_REDUCED
 ```
+
+各成功State Transitionに`trace_id / trigger_refs / previous_transition_event_ref`等を持たせ、後から順序と影響を追えるようにする。
 
 将来のDependency / Impact Contractで正式化する。
 
@@ -1731,6 +1849,8 @@ Live = insufficient
 
 StateはSummaryであり、元のEvidencePackage / AssessmentProfileを参照可能にする。
 
+StateTransitionEventの`trigger_refs`から、State変更を起こしたEvidencePackage / ResearchResult / ProductionEvidence等へ遡れることを目標とする。
+
 ---
 
 # 21. State変更とKnowledge化
@@ -1749,7 +1869,7 @@ RUNNING → ERROR → RECOVERY → RUNNING
 原因: Source timeout
 ```
 
-これらを後から、
+これらのStateTransitionEventを後から、
 
 - Failure
 - Negative Knowledge
@@ -1758,6 +1878,8 @@ RUNNING → ERROR → RECOVERY → RUNNING
 - Research Candidate
 
 へ変換可能にする。
+
+State履歴そのものを消さず、Knowledgeは履歴を参照する。
 
 ---
 
@@ -1779,6 +1901,8 @@ RUNNING → ERROR → RECOVERY → RUNNING
 
 満たさない場合、新Stateを増やさない。
 
+State History Objectも同様に個別Objectを増やさず、原則共通`StateTransitionEvent`を利用する。
+
 ---
 
 # 23. State変更ルール
@@ -1794,7 +1918,9 @@ State名・意味・遷移を変更する場合、`DESIGN_CHANGE_RULES.md` に�
 - Risk State意味変更
 - Runtime State意味変更
 
-これらは既存DB / Python Enum / Test / Monitoring / Telegram / Analyticsへ影響するため、Impact Analysisを必須候補とする。
+これらは既存DB / Python Enum / Test / Monitoring / Telegram / Analytics / StateTransitionEvent解釈へ影響するため、Impact Analysisを必須候補とする。
+
+State Machine Version変更時も過去StateTransitionEventを新Versionの意味で無言に書き換えない。
 
 ---
 
@@ -1820,42 +1946,75 @@ class RuntimeState(str, Enum):
 
 重要なのは論理State定義であり、実装言語は将来変更可能にする。
 
+StateTransitionEventも実装時にPydantic / Dataclass / ORM / Event Schema等へ落とせるが、Semantic定義は`OBJECT_DICTIONARY.md`へ従う。
+
 ---
 
 # 25. Database実装への変換方針
 
-後の `DATABASE_SCHEMA.md` では、最低限次を検討する。
+後の `DATABASE_SCHEMA.md` では、Current StateとTransition Historyを分離して検討する。
+
+Current Projection候補:
 
 ```text
+state_machine_id
+state_machine_type
 current_state
+previous_state
 state_machine_version
 state_changed_at
+latest_transition_event_ref
 ```
 
-加えてState History用に、概念上:
+Transition Historyは正式Semantic Object:
 
 ```text
-StateTransitionEvent
+OBJ-STATE-001: StateTransitionEvent
 ```
 
-を持つ候補とする。
+を保存する。
 
-例:
+論理Fields:
 
 ```yaml
-transition_id:
-target_object_id:
+state_transition_event_id:
+target_object_ref:
+state_machine_id:
 state_machine_type:
+state_machine_version:
 from_state:
 to_state:
+expected_previous_state:
+transition_sequence:
 trigger_refs: []
 reason_codes: []
-changed_at:
-changed_by_role:
-state_machine_version:
+requested_by_role:
+authorized_by_role:
+applied_by_role:
+requested_by_actor:
+transitioned_at:
+effective_at:
+created_at:
+manual_override_ref:
+authorization_ref:
+previous_transition_event_ref:
+trace_id:
 ```
 
-正式DB Table名は `DATABASE_SCHEMA.md` で確定する。
+DB実装時に最低限検討すること:
+
+```text
+- target / state_machine単位のtransition_sequence uniqueness
+- expected_previous_stateによるCAS / optimistic concurrency
+- Transition Apply / Event Insert / Current Projection Updateのatomicity
+- latest_transition_event_ref整合性
+- ReplayによるProjection再構築
+- Immutable retention
+- State Machine Version migration
+- AuditEventとの参照関係
+```
+
+正式Table名・Index・Transaction方式は `DATABASE_SCHEMA.md` で確定する。
 
 ---
 
@@ -1876,6 +2035,8 @@ Position Thesis: WATCH
 
 異なるState Machineを一つの `SYSTEM_STATUS = BAD` へ潰さない。
 
+必要時にはCurrent Stateだけでなく、直近`StateTransitionEvent`の変更時刻・Reason Codeを表示可能にする。
+
 ---
 
 # 27. Long-Term Governance
@@ -1885,10 +2046,12 @@ Position Thesis: WATCH
 そのため:
 
 - State Machine Versionを残す
+- StateTransitionEventへ当時のState Machine Versionを残す
 - 廃止Stateを即削除しない
 - Old State → New State Migration Mapを持てるようにする
 - 過去Trade / Trialを当時Stateの意味で再現可能にする
 - 新VersionのState意味で過去履歴を自動書き換えない
+- Current Projectionが壊れてもTransition Historyから再構築可能な設計を維持する
 
 例:
 
@@ -1919,9 +2082,11 @@ StateまたはState Machineを正式化するには最低限:
 □ Recovery / Reopen条件
 □ Hard / Soft Trigger
 □ Hysteresis要否
-□ State History保存
+□ StateTransitionEvent保存
+□ transition_sequence / Ordering rule
 □ Trace / Trigger Reference
 □ Version Rule
+□ Manual Override trace
 □ Monitoring表示
 □ Long-Term Migration方針
 ```
@@ -1944,11 +2109,14 @@ Position Supervisor Hysteresisの具体時間
 Retry回数 / Backoff時間
 Storage Retention期間
 Backup頻度
+StateTransitionEventの物理Table / Index / Partition
+State Transition atomic write方式
+Authority Matrixの最終一意化
 ```
 
 理由:
 
-これらはState名ではなくPolicy / Threshold / Contractの問題であり、Research・Risk・Operations設計でVersion付きにした方がよい。
+これらはState名ではなくPolicy / Threshold / Contract / Storage / Authorityの問題であり、Research・Risk・Operations・Data Contract・DB設計でVersion付きにした方がよい。
 
 ---
 
@@ -2001,6 +2169,8 @@ Incident:
 DETECTED → CLASSIFYING → CONTAINED → MITIGATING → RECOVERING → RESOLVED → MONITORING → CLOSED
 ```
 
+すべての成功Transitionは共通`StateTransitionEvent`として履歴化可能にする。
+
 ---
 
 # 31. 最終原則
@@ -2009,9 +2179,21 @@ DETECTED → CLASSIFYING → CONTAINED → MITIGATING → RECOVERING → RESOLVE
 
 Stateは、
 
-> **長期間の研究・Production・Risk・Runtimeが、今どの段階にあり、なぜそこへ移動したかを説明するための正式な履歴構造**
+> **長期間の研究・Production・Risk・Runtimeが、今どの段階にあり、なぜそこへ移動したかを説明するための正式な状態体系**
 
 として扱う。
+
+FIX-010ではさらに:
+
+```text
+Current State
+= 現在値の高速Projection
+
+StateTransitionEvent
+= 実際に成功・適用されたState変更のImmutable Historical Fact
+```
+
+を正式に分離する。
 
 そして、
 
@@ -2019,9 +2201,9 @@ Stateは、
 State
 + Transition Rule
 + Trigger
-+ History
++ StateTransitionEvent History
 + Version
-+ Authority
++ Authority Provenance
 ```
 
 をセットで管理する。
