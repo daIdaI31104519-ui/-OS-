@@ -203,7 +203,8 @@ State履歴は、将来次を説明できること。
 何がTriggerだった？
 どのEvidence / Error / Decisionが原因？
 誰がRequestした？
-誰 / どのRoleがAuthorizeした？
+誰 / どのRoleがRecommendした？
+誰 / どのRoleがApproveした？
 誰 / どのRoleが実際にApplyした？
 どのState Machine Versionだった？
 Manual Overrideだった？
@@ -317,6 +318,52 @@ BはCurrentが既にSUSPENDEDなら古いACTIVE前提のTransitionとして拒�
 同一Target / State Machine内でTransition履歴の順序を一意に追跡可能にする。
 
 Timestampだけに依存して遷移順序を曖昧にしない。
+
+## RULE-STATE-011: Authority責任を分離する
+
+FIX-013以降、State変更責任を次へ分離する。
+
+```text
+REQUEST
+↓
+RECOMMEND
+↓
+APPROVE
+↓
+APPLY
+↓
+StateTransitionEvent
+```
+
+```text
+Request Authority
+≠ Recommend Authority
+≠ Approve Authority
+≠ Apply Authority
+```
+
+4責任を必ず別人・別Processへ割り当てる必要はないが、意味と権限を混同しない。
+
+## RULE-STATE-012: Applyは原則Single Writer
+
+```text
+1 State Machine
+= 原則1 Apply Authority / single-writer responsibility
+```
+
+複数Roleが同じCurrent Stateを無制限に直接更新してはならない。
+
+## RULE-STATE-013: RestrictionとRecoveryを非対称にする
+
+```text
+Safety Restriction / 危険側への遷移
+= 明示されたEmergency AuthorityによるFast Pathを許可可能
+
+Recovery / Permission Expansion / Risk Expansion
+= Strict Approval / Revalidationを要求する
+```
+
+Restrictive Authorityが単独で安全側・権限拡大側へ自動復帰させない。
 
 ---
 
@@ -1654,53 +1701,197 @@ Hypothesis = DEMO_FORWARD
 
 ---
 
-# 13. State Authority
+# 13. FIX-013 State Authority Matrix
 
 Stateは誰でも自由に書き換えられるものではない。
 
-正式Authorityは後続Contract / FIX-013 Authority Matrixで確定するが、責任候補を次とする。
+FIX-013では、State変更のAuthorityを次の4責任へ正式分離する。
 
-| State Machine | Primary Authority |
-|---|---|
-| Hypothesis Lifecycle | Causal Engine + Research / Approval |
-| Edge Lifecycle | Research / Approval |
-| Research Candidate | Research Orchestrator |
-| Research Plan Lifecycle | Research Orchestrator |
-| Research Plan Lock | Research Orchestrator / Validation Framework |
-| Research Trial | Experimental / Validation Framework |
-| Knowledge Aging / Health | Knowledge Aging Governance |
-| Production Promotion | Approval + Risk Governance |
-| Risk State | Risk Governance / Defense |
-| Position Thesis | Position Supervisor |
-| Runtime | Runtime |
-| System Health | Monitoring |
-| Incident | Failure / Recovery Governance |
-| Source | Source Lifecycle Governance / Adapter |
-| Data Quality | Data Quality |
-| Storage | Resource / Storage Governance |
-| Backup | Backup Governance |
-| Migration | Version / Migration Governance |
-| Deployment | Deployment / Operations |
-
-原則:
-
-- Signal EngineがRisk Stateを勝手にNORMALへ戻さない
-- RuntimeがHypothesisをAPPROVEDへ変更しない
-- TelegramがState DBを直接書き換えない
-- AI ReviewがProduction Promotionを直接昇格しない
-- LoggerがState Authorityにならない
-
-FIX-010ではAuthorityを一人へ最終確定するのではなく、成功Transitionごとに:
-
-```yaml
-requested_by_role:
-authorized_by_role:
-applied_by_role:
+```text
+REQUEST
+↓
+RECOMMEND
+↓
+APPROVE
+↓
+APPLY
+↓
+StateTransitionEvent
 ```
 
-をStateTransitionEventへ残せることを固定する。
+## 13.1 Authority Meaning
 
-Authorityの最終一意性・Request / Recommend / Approve / Applyの責任分離はFIX-013で確定する。
+```text
+REQUEST
+= State変更の必要性を要求する。Current Stateは変更しない。
+
+RECOMMEND
+= Evidence / Validation / Domain専門判断に基づき、Transitionを推奨する。Current Stateは変更しない。
+
+APPROVE
+= Governance / Policy上、そのTransitionを実施してよいと許可する。Current Stateへ直接書き込まない。
+
+APPLY
+= Current State / expected_previous_state / Transition Rule / Authority / Approvalを検証し、実際にCurrent State変更を適用する。
+```
+
+正式原則:
+
+```text
+Request Authority
+≠ Recommend Authority
+≠ Approve Authority
+≠ Apply Authority
+```
+
+## 13.2 Single-Writer Principle
+
+```text
+1 State Machine
+= 原則1 Apply Authority / single-writer responsibility
+```
+
+複数Roleが同じCurrent Stateへ無制限に直接書き込む構造を禁止する。
+
+`State Controller`という名前は、新しいTop-Level Layerを意味せず、既存Domain内のApply responsibilityを表す論理名。
+
+## 13.3 Authority Matrix
+
+| State Machine | Request Authority候補 | Recommend Authority | Approve Authority | Apply Authority |
+|---|---|---|---|---|
+| Hypothesis Lifecycle | Causal Engine / Research / Post-Trade | Research / Validation | Knowledge Promotion / Approval Gate | Hypothesis State Controller |
+| Edge Lifecycle | Research / Post-Trade | Validation Framework | Knowledge Promotion / Approval Gate | Edge State Controller |
+| Knowledge Aging / Health | Research / Post-Trade / Monitoring / Knowledge Domain | Knowledge Aging Governance | Knowledge Aging Governance | Knowledge Lifecycle Controller |
+| Production Promotion | Research / Knowledge / Risk / Post-Trade | Validation / Knowledge Promotion | Knowledge Promotion + Risk Governance | Production Promotion Controller |
+| Risk State | Monitoring / Defense / Runtime / Authorized Human | Defense / Risk Governance | Risk Governance | Risk State Controller |
+| Research Candidate | Authorized Domain Roles / Research Router | Research Router | Research Orchestrator | Research Candidate Controller |
+| Research Plan Lifecycle | Research | Research Orchestrator | Research Orchestrator | Research Plan Controller |
+| Research Plan Lock | Research / Validation | Validation Framework | Research Orchestrator / Validation Framework | Research Plan Lock Controller |
+| Research Trial | Research / Validation | Experimental / Validation Framework | Experimental / Validation Framework | Research Trial Controller |
+| Constraint Lifecycle | Research / Validation / Risk | Validation / Knowledge Promotion | Knowledge Promotion / Risk Governance | Constraint State Controller |
+| Position Thesis | Market / Evidence inputs / Supervisor | Position Supervisor | Position Supervisor Policy | Position Thesis Controller / Position Supervisor |
+| Runtime | Human / Monitoring / Recovery / Outer Control | Runtime / Monitoring / Recovery | Runtime Authority | Runtime Controller |
+| System Health | Monitoring probes / subsystem diagnostics | Monitoring | Monitoring Policy | Health Controller |
+| Incident | Monitoring / Runtime / Recovery | Failure / Recovery Governance | Failure / Recovery Governance | Incident Controller |
+| Recovery Action | Incident / Runtime / Human | Recovery | Recovery Policy / Authority | Recovery Controller |
+| Source Lifecycle | Adapter / Monitoring | Source Lifecycle Governance | Source Lifecycle Governance | Source Lifecycle Controller |
+| Data Quality | Data Quality checks / Monitoring | Data Quality | Data Quality Policy | Data Quality Controller |
+| Storage Lifecycle | Resource / Storage Monitoring | Storage Governance | Storage Governance | Storage Controller |
+| Backup Lifecycle | Operations / Scheduler | Backup Governance | Backup Governance | Backup Controller |
+| Migration Lifecycle | Version / Migration Governance | Migration Validation | Migration Governance | Migration Controller |
+| Deployment Stage | Development / Operations | Validation / CI | Deployment / Release Control | Deployment Controller |
+
+このMatrixはSemantic Responsibilityの正本候補であり、実装上のClass名・Process名・IAM設定は後続Contract / Python / Security設計で決める。
+
+## 13.4 Shared State Transition Engine
+
+共通`State Transition Engine`は実装可能だが、Authorityではない。
+
+```text
+State Transition Engine
+= Transition Rule Check
++ expected_previous_state / CAS
++ Approval / Authorization validation
++ Atomic Apply
++ StateTransitionEvent persist
++ Current Projection update
+
+State Authority
+= 誰がRequest / Recommend / Approve / Applyできるか
+```
+
+共通Engineが全State MachineのApprove権限を持つ設計は禁止する。
+
+## 13.5 Safety Restrictive Fast Path
+
+次のような危険側・制限側Transitionは、Policyで明示されたEmergency AuthorityによるFast Pathを許可できる。
+
+```text
+Risk NORMAL → EMERGENCY
+Risk NORMAL → NO_NEW_ENTRY
+Production NORMAL_LIVE → PAUSED
+Runtime RUNNING → PAUSED / STOPPING
+Source ACTIVE → UNAVAILABLE
+Data Quality HEALTHY → INVALID
+```
+
+Fast Pathでも:
+
+```text
+Authority Check
+Transition Rule Check
+StateTransitionEvent
+Audit / Trace
+```
+
+を省略しない。
+
+## 13.6 Recovery / Permission Expansion Strict Path
+
+次のような安全側・権限拡大側TransitionはRestrictive Fast Pathより厳しく扱う。
+
+```text
+Risk EMERGENCY → NORMAL
+Risk NO_NEW_ENTRY → NORMAL
+Production PAUSED → NORMAL_LIVE
+Runtime ERROR / RECOVERY → RUNNING
+Data Quality INVALID → HEALTHY
+Source UNAVAILABLE → ACTIVE
+```
+
+候補要件:
+
+```text
+Root Cause resolved
+Revalidation / Health verification
+Cooldown / persistence
+Required Approval
+Current State再確認
+```
+
+Restrictive Authorityが単独でRisk / Permissionを元へ戻してはならない。
+
+## 13.7 Human / Telegram
+
+Human / TelegramはState DBへ直接書き込まない。
+
+```text
+Human / Telegram
+→ RuntimeCommand / Manual Override Request
+→ Authentication / Authorization
+→ Authority Flow
+→ APPLY
+→ StateTransitionEvent
+```
+
+`/stop` / `/emergency` / `/no-entry`等のSafety Restrictionは、Policyで許可されたEmergency Fast Pathへ接続可能。
+
+`/risk-normal` / `/normal-live`等のRisk Expansion / Permission ExpansionはStrict Approvalを要求する。
+
+## 13.8 AI / Logger / Post-Trade
+
+External AI Reviewは原則:
+
+```text
+REQUEST / RECOMMEND
+```
+
+まで。AI単独でAPPROVE / APPLYしない。
+
+LoggerはStateTransitionEvent / AuditEventのCustodianであり、State Authorityではない。
+
+Post-Trade AnalysisはState変更材料を分析しRequest / Recommendation候補を出せるが、Current Stateへ直接書き込まない。
+
+## 13.9 ApprovalDecisionとの境界
+
+FIX-013では`APPROVE`責任を正式化するが、独立`ApprovalDecision` Objectはまだ作らない。
+
+```text
+ApprovalDecision Object
+→ FIX-015で正式化
+```
+
+FIX-013時点では`authorization_ref / recommendation_ref`等から後続Objectへ接続可能にする。
 
 ---
 
@@ -1733,6 +1924,8 @@ EMERGENCY → NORMAL
 は原則一発復帰させない。
 
 どちらの成功TransitionもStateTransitionEventとして記録し、回復の方が慎重であることを履歴から確認できるようにする。
+
+FIX-013以降、この非対称性はAuthorityにも適用する。
 
 ---
 
@@ -1826,6 +2019,8 @@ requested_by_actor:
 
 Override要求が拒否された場合は成功StateTransitionEventを生成しない。
 
+FIX-013以降、Manual Overrideも原則Apply Authorityを経由する。Emergency Restrictive Overrideだけは明示Policyに従うFast Pathを許可できる。
+
 ---
 
 # 18. StateとMarket Eventの関係
@@ -1867,6 +2062,8 @@ Risk = RISK_REDUCED
 ```
 
 各成功State Transitionに`trace_id / trigger_refs / previous_transition_event_ref`等を持たせ、後から順序と影響を追えるようにする。
+
+FIX-013以降、重要TransitionではRequest / Recommendation / Approval / Apply provenanceも追跡可能にする。
 
 将来のDependency / Impact Contractで正式化する。
 
@@ -1936,7 +2133,7 @@ State履歴そのものを消さず、Knowledgeは履歴を参照する。
 4. StateではなくExperiment Modeではないか？
 5. 既存State + reason_codeで十分ではないか？
 6. 新Stateに明確な遷移条件があるか？
-7. 誰がStateを変更するか決まっているか？
+7. 誰がRequest / Recommend / Approve / Applyできるか決まっているか？
 8. 禁止遷移を定義できるか？
 9. 長期維持価値があるか？
 10. FIX-012の別State軸の責任を侵食していないか？
@@ -1960,6 +2157,8 @@ State名・意味・遷移を変更する場合、`DESIGN_CHANGE_RULES.md` に�
 - Production Promotion飛び越し許可
 - Risk State意味変更
 - Runtime State意味変更
+- Apply Authority変更
+- Emergency Fast Path権限変更
 
 これらは既存DB / Python Enum / Test / Monitoring / Telegram / Analytics / StateTransitionEvent解釈へ影響するため、Impact Analysisを必須候補とする。
 
@@ -2009,6 +2208,8 @@ AND Risk State
 
 を別々に確認する。
 
+FIX-013以降、各ModuleがCurrent Stateを直接更新する実装を避け、Apply Authority / State Transition Engine経由へ統一する。
+
 ---
 
 # 25. Database実装への変換方針
@@ -2050,6 +2251,8 @@ transition_sequence:
 trigger_refs: []
 reason_codes: []
 requested_by_role:
+recommended_by_role:
+recommendation_ref:
 authorized_by_role:
 applied_by_role:
 requested_by_actor:
@@ -2071,6 +2274,8 @@ PRODUCTION_PROMOTION
 ```
 
 を一つの`status`列へ圧縮しない。
+
+FIX-013ではDBへ直接書き込めるRole / Serviceを無制限に増やさず、State MachineごとのApply Authority / write pathを一意にできる設計を優先する。
 
 正式Table名・Index・Transaction方式は `DATABASE_SCHEMA.md` で確定する。
 
@@ -2104,7 +2309,7 @@ Risk: CAUTION
 
 異なるState Machineを一つの `SYSTEM_STATUS = BAD` や `status = ACTIVE` へ潰さない。
 
-必要時にはCurrent Stateだけでなく、直近`StateTransitionEvent`の変更時刻・Reason Codeを表示可能にする。
+必要時にはCurrent Stateだけでなく、直近`StateTransitionEvent`の変更時刻・Reason Code・Authority provenanceを表示可能にする。
 
 ---
 
@@ -2121,6 +2326,7 @@ Risk: CAUTION
 - 過去Trade / Trialを当時Stateの意味で再現可能にする
 - 新VersionのState意味で過去履歴を自動書き換えない
 - Current Projectionが壊れてもTransition Historyから再構築可能な設計を維持する
+- Authority Matrix / Apply Authority変更もVersion / Audit対象にする
 
 FIX-012以前の:
 
@@ -2144,7 +2350,11 @@ StateまたはState Machineを正式化するには最低限:
 □ State一覧
 □ 各Stateの意味
 □ 他State Machineとの責任境界
-□ Primary Authority
+□ Request Authority
+□ Recommend Authority
+□ Approve Authority
+□ Apply Authority
+□ Emergency / Restrictive Authority要否
 □ 入口条件
 □ 出口条件
 □ 許可遷移
@@ -2185,12 +2395,15 @@ Storage Retention期間
 Backup頻度
 StateTransitionEventの物理Table / Index / Partition
 State Transition atomic write方式
-Authority Matrixの最終一意化
+State Transition Engineの実装方式
+Authority delegation / secondary authorityの具体的IAM表現
+Emergency Authorityの認証方式
+ApprovalDecision Object / schema（FIX-015）
 ```
 
 理由:
 
-これらはState名ではなくPolicy / Threshold / Contract / Storage / Authorityの問題であり、Research・Risk・Operations・Data Contract・DB設計でVersion付きにした方がよい。
+これらはState名そのものではなくPolicy / Threshold / Contract / Storage / Security / Approval Objectの問題であり、Research・Risk・Operations・Data Contract・DB・Security設計でVersion付きにした方がよい。
 
 ---
 
@@ -2251,6 +2464,14 @@ DETECTED → CLASSIFYING → CONTAINED → MITIGATING → RECOVERING → RESOLVE
 
 すべての成功Transitionは共通`StateTransitionEvent`として履歴化可能にする。
 
+Authorityは全State Machineで概念上:
+
+```text
+REQUEST → RECOMMEND → APPROVE → APPLY → StateTransitionEvent
+```
+
+へ分離する。
+
 ---
 
 # 31. 最終原則
@@ -2280,24 +2501,38 @@ Research maturity
 
 を正式に分離する。
 
-つまり:
+FIX-013ではさらに:
 
 ```text
-Hypothesis / Edge Lifecycle
-+ Knowledge Aging / Health
-+ Production Promotion Stage
-+ Risk State
+REQUEST
+≠ RECOMMEND
+≠ APPROVE
+≠ APPLY
 ```
 
-を独立管理し、一つの曖昧な`ACTIVE / SUSPENDED / DEGRADED`等へ戻さない。
+を正式に分離し、Current Stateへの書込みは原則State MachineごとのApply Authorityへ一本化する。
+
+さらに:
+
+```text
+Safety Restriction
+= Fast Path可能
+
+Recovery / Risk Expansion / Permission Expansion
+= Strict Path
+```
+
+とする。
 
 これにより市場理解OSは、数年後・数十年後でも、
 
 ```text
-「研究として承認済みだが、今は古い」
-「Knowledgeは健全だが、まだDemo Forwardまで」
-「KnowledgeはLive利用可能だが、OS全体Riskで新規Entry禁止」
-「EdgeはApprovalを維持するが、最近Liveで劣化したためProduction停止」
+「誰がState変更を要求した？」
+「誰がEvidenceを見て推奨した？」
+「誰が承認した？」
+「誰が実際に書き込んだ？」
+「なぜEmergencyへ落とした？」
+「なぜ復帰を許可した？」
 ```
 
-を正確に再現可能にする。
+まで再現可能にする。
