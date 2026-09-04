@@ -618,6 +618,93 @@ RawData / Observation / TimeSeriesMeasurementから市場理解に利用でき�
 
 ---
 
+# ROLE-EVT-001: Event Detection Processor
+
+## Category
+MARKET OBSERVATION / EVENT DETECTION
+
+## Purpose
+
+Observation / TimeSeriesMeasurement / Featureから、研究・比較可能な「市場で発生した現象」を検出し、Canonicalな`MarketEvent`として固定する。
+
+## Owns
+
+- MarketEvent生成責任
+- Event Detection Ruleの適用
+- Event timing / magnitude / provenance記録
+- 同一実市場Eventの重複統合・Canonical Event ID付与
+
+## Inputs
+
+- Observation
+- TimeSeriesMeasurement
+- Feature
+- QualityProfile
+- SourceMetadata reference
+- Versioned Event Detection Rule / Configuration reference
+
+## Outputs
+
+- MarketEvent
+- Diagnostics
+- ResearchCandidate（Detection miss / false positive / rule degradation等を検出した場合）
+
+## Upstream
+
+- Normalizer
+- Time Series Processor
+- Feature Generator
+- Data Quality
+
+## Downstream
+
+- Feature Priority
+- Market Intelligence
+- Causal Engine
+- Research
+
+## Responsibilities
+
+- OI Shock / Liquidation Shock / Funding急変 / Spread急拡大 / Liquidity Collapse / ETF Flow Shock / Volume Spike / Volatility Expansion等の「発生事実」を検出する
+- `detected_at / start_at / peak_at / end_at` 等の時間情報を可能な範囲で保持する
+- Detection Rule / Rule Versionを残し、後から当時のEvent判定を再現可能にする
+- 複数Source / Observationが同一実市場Eventを示す場合、Unique Market Event数を水増ししないようCanonical Eventへ統合する
+- `NO_EVENT_DETECTED` と `EVENT_DETECTION_UNAVAILABLE / DEGRADED` を区別する
+- Data Quality低下時はEventのConfidence / Quality制約を明示する
+
+## Prohibitions
+
+- MarketEventへBUY / SELL意味を埋め込む
+- `BTC_WILL_CRASH` 等の予測をEvent Typeとして生成する
+- `WHALES_ARE_MANIPULATING_MARKET` 等の因果解釈をEvent Typeとして生成する
+- Causeを確定する
+- MarketContextを生成する
+- Trade Signalを生成する
+- Event Detection失敗を「Eventなし」と偽装する
+
+## Failure Behavior
+
+Event Detection自体がDEGRADED / ERRORの場合、空のMarketEvent一覧だけで正常扱いしない。DiagnosticsへDetector Health / Coverage Impactを残し、下流が「Eventなし」と「Event判定不能」を区別できるようにする。
+
+## Research Feedback
+
+- Market Intelligenceが重要変化を認識したのに対応するMarketEventが存在しない場合、MIはCanonical Eventを直接作らず`UnexplainedEvent` / `ResearchCandidate`としてEvent Detection Researchへ戻す
+- False Positive / Detection Miss / Duplicate Split / Duplicate Merge Error / Rule Stalenessを研究対象化できる
+
+## Boundary
+
+```text
+Event Detection = 何が発生したかを検出・識別する
+Market Intelligence = そのEventを市場全体の文脈で解釈する
+Causal Engine = なぜ発生した可能性があるかを検証可能な因果候補へ変換する
+```
+
+## Long-Term Notes
+
+独立Top-Level PlaneではなくMarket Observation Plane内の軽量Role / Componentとして維持する。Event Detection Rule自体を将来Research / Version管理できるようにするが、現段階ではRuleを新しい巨大Layerへ昇格させない。
+
+---
+
 # ROLE-FEAT-002: Feature Priority
 
 ## Category
@@ -630,7 +717,7 @@ MARKET UNDERSTANDING
 ## Inputs
 
 - Historical / OOS usefulness
-- Current Basic Context / already-available Event information
+- Current Basic Context / already-available MarketEvent information
 - Time / Horizon
 - QualityProfile
 - Feature Stability / Redundancy
@@ -664,7 +751,7 @@ MARKET UNDERSTANDING
 ```text
 Previous Confirmed MarketDNA = DNA_(t-1)
 +
-Current Basic Context / already-available Event information
+Current Basic Context / already-available MarketEvent information
 ↓
 FeaturePriority_t
 ↓
@@ -685,7 +772,7 @@ FeaturePriority_t
 → FeaturePriority_t
 ```
 
-重大Event時も`DNA_t`を同じCycleへ逆流させない。必要なら新しい`evaluation_cycle_id`を発行し、直前に確定済みのMarketDNAと最新Context / Eventを使って新Cycleとして再評価する。
+重大Event時も`DNA_t`を同じCycleへ逆流させない。必要なら新しい`evaluation_cycle_id`を発行し、直前に確定済みのMarketDNAと最新Context / MarketEventを使って新Cycleとして再評価する。
 
 ## Research Feedback
 
@@ -700,7 +787,7 @@ MARKET UNDERSTANDING
 
 ## Purpose
 
-「今、市場で何が起きているか」を構造化して解釈する。
+「今、市場で何が起きているか」を、Feature / MarketEvent / Quality等を組み合わせて市場全体の文脈として構造化・解釈する。
 
 ## Inputs
 
@@ -734,6 +821,8 @@ MARKET UNDERSTANDING
 
 ## Prohibitions
 
+- Canonical MarketEventを直接生成する
+- Event Detection Ruleの代わりに事後的な物語でEventを捏造する
 - 原因を確定する
 - Causal Hypothesisを最終確定する
 - BUY / SELL
@@ -742,9 +831,13 @@ MARKET UNDERSTANDING
 
 説明不能なら物語を作らず `UnexplainedEvent` とする。
 
+Event DetectionがDEGRADED / UNAVAILABLEの場合、「Eventなし」と解釈せずQuality / Uncertaintyへ影響を伝播する。
+
 ## Research Feedback
 
 UnexplainedEvent / interpretation anomalyをResearchCandidateへ送る。
+
+重要変化を認識したのに対応するCanonical MarketEventが存在しない場合は、MarketEventを直接追加せずEvent Detection Miss候補としてResearchCandidateへ送る。
 
 ---
 
@@ -789,6 +882,7 @@ MARKET UNDERSTANDING / CAUSAL
 
 ## Prohibitions
 
+- MarketEventのCanonical生成責任を持つ
 - 相関だけでCause確定
 - Historical / OOS / Stress大規模実験を自Roleで全部実行
 - BUY / SELL
@@ -796,7 +890,9 @@ MARKET UNDERSTANDING / CAUSAL
 ## Boundary
 
 ```text
-Causal Engine = 何を検証すべきか定義
+Event Detection = 何が発生したか
+Market Intelligence = 発生したEventを市場文脈でどう解釈するか
+Causal Engine = なぜ発生した可能性があるか・何を検証すべきか
 Research = 実際に検証する
 ```
 
@@ -1444,6 +1540,7 @@ Post-Trade / Runtime / Market理解で発生したResearchCandidateを原因領�
 
 ```text
 Data issue → Data Quality Research
+Event detection issue → Event Detection Research
 Formula issue → Formula Research
 Feature issue → Feature Research
 Market interpretation issue → MI Research
@@ -1855,6 +1952,17 @@ Normalizer = 形式変換
 Data Quality = 信頼可能性評価
 ```
 
+## Feature vs Event Detection vs Market Intelligence vs Causal Engine
+
+```text
+Feature = どう測ったか
+Event Detection = 何が発生したかを識別する
+Market Intelligence = 発生したものを市場全体の文脈で解釈する
+Causal Engine = なぜ発生した可能性があるかを検証可能な仮説へ変換する
+```
+
+MarketEventのCanonical生成責任はEvent Detection Processorに一本化する。
+
 ## Feature vs Feature Priority
 
 ```text
@@ -1865,7 +1973,7 @@ Priority = 今何を見るべきか決める
 ## Market Intelligence vs Causal Engine
 
 ```text
-MI = 何が起きているか
+MI = 何が起きているかを文脈化する
 Causal = なぜ起きている可能性があるか
 ```
 
@@ -1880,7 +1988,7 @@ Research = 実際に検証する
 
 ```text
 MarketDNA_t = 現Evaluation Cycleで確定する詳細な市場状態
-FeaturePriority_t = Previous Confirmed MarketDNA (DNA_t-1) + Current Basic Context / Eventを使い、現Cycleで何を見る価値が高いか決める
+FeaturePriority_t = Previous Confirmed MarketDNA (DNA_t-1) + Current Basic Context / MarketEventを使い、現Cycleで何を見る価値が高いか決める
 ```
 
 Cycle Boundary:
@@ -1960,8 +2068,9 @@ Router = どの研究へ送るか
 Collector → recurring source latency
 Data Quality → recurring missing pattern
 Feature → unstable measurement
+Event Detection → detection miss / false positive / duplicate event issue
 Feature Priority → wrong priority candidate
-Market Intelligence → unexplained move
+Market Intelligence → unexplained move / event detection miss candidate
 Causal → strong alternative hypothesis
 Market DNA → novel regime candidate
 Defense → possible over-blocking
@@ -2048,6 +2157,8 @@ Q7. 何十年維持する価値があるか？
 ```
 
 Q1〜Q5で解決できるなら原則新Top-Level Roleを追加しない。
+
+FIX-007の`Event Detection Processor`は、Canonical MarketEvent生成・Detection Rule適用・Event重複統合・Failure時の判定不能表現という独立責任を持つためRoleとして定義する。ただしMarket Observation Plane内の軽量Componentであり、新Top-Level Planeにはしない。
 
 ---
 
