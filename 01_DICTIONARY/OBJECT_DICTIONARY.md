@@ -2785,7 +2785,7 @@ new_research_candidate_refs: []
 
 ## Invariants
 
-AI ReviewはAdvisory。AI停止時もProduction Coreが原則動作可能にする。
+AI ReviewはAdvisory。AI停止時も本番経路を成立可能にする。
 
 AIが新しいHypothesisを提案しても、現在TradeThesisへ直接追加せずResearchCandidateへ送る。
 
@@ -3682,7 +3682,7 @@ operator_or_automation:
 
 ## Invariants
 
-Restart無限Loopを許可しない。
+Restart無限Loopを許さない。
 
 ---
 
@@ -3870,7 +3870,7 @@ SourceMetadata.retrieval_status
 
 を分離する。
 
-ApplicableHypothesisSet / TradeThesis / EntryThesisはそれぞれ生成時点の情報を固定し、後から現在Knowledgeが変わっても過去Production判断を無言で書き換えない。
+ApplicableHypothesisSet / TradeThesis / EntryThesisはそれぞれ生成時点の情報を固定し、後から現在Knowledgeが変化しても過去Production判断を無言で書き換えない。
 
 StateについてもCurrent Stateだけを上書きしてTransition Historyを失わない。
 
