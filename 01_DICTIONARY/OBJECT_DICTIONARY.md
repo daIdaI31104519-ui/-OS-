@@ -71,6 +71,8 @@ MarketDNA
 ResearchResult
 ApplicableHypothesisSet
 TradeThesis
+EntryThesis
+ProductionEvidence
 OrderIntent
 TradeResult
 ```
@@ -221,8 +223,9 @@ ApplicableHypothesisSet
 TradeThesis
 EntryThesis
 OrderIntent
-TradeResult
+ExecutionRecord
 ProductionEvidence
+TradeResult
 ```
 
 修正が必要な場合は元Objectを上書きせず、新Version / Correction Object / Superseded関係を使う。
@@ -878,9 +881,9 @@ evaluation_cycle_id:
 market_profile_id:
 current_context_ref:
 current_event_refs: []
-previous_confirmed_dna_ref:      # 原則 DNA_(t-1)。Cold Startではnull可
+previous_confirmed_dna_ref:
 previous_confirmed_dna_as_of:
-dna_reference_mode:              # PREVIOUS_CONFIRMED | COLD_START_BASELINE
+dna_reference_mode:
 horizon:
 selected_features: []
 low_priority_features: []
@@ -888,7 +891,7 @@ sentinel_features: []
 priority_reasons: []
 redundancy_map:
 quality_constraints:
-recompute_reason:                # NORMAL_CYCLE | MAJOR_EVENT_NEW_CYCLE 等
+recompute_reason:
 priority_version:
 created_at:
 valid_until:
@@ -900,11 +903,10 @@ valid_until:
 - Low Priority = Raw取得停止ではない
 - Safety Sentinel FeatureはPriority低下だけで観測停止しない
 - `previous_confirmed_dna_ref` は当該`evaluation_cycle_id`より前に確定済みのMarketDNAだけを参照する
-- **同一Evaluation Cycleで後段生成される`MarketDNA_t`を参照してはならない**
+- 同一Evaluation Cycleで後段生成される`MarketDNA_t`を参照してはならない
 - FeaturePriorityProfile生成後に、同CycleのMarketDNAを使ってPriority理由・選択Featureを事後改変しない
-- Previous Confirmed MarketDNAが存在しないCold Startでは、`dna_reference_mode = COLD_START_BASELINE` とし、Baseline Feature / Sentinel Feature / Current Basic Context中心で生成する
-- Major Regime / Structural Eventで再計算する場合は、同一Cycleを再帰更新せず新しい`evaluation_cycle_id`を発行する
-- `previous_confirmed_dna_ref` / `previous_confirmed_dna_as_of` / `priority_version` を保存し、後から当時のPriority判断を再現できるようにする
+- Previous Confirmed MarketDNAが存在しないCold Startでは`COLD_START_BASELINE`を使う
+- Major Regime / Structural Eventで再計算する場合は新しい`evaluation_cycle_id`を発行する
 
 ## Canonical Cycle
 
@@ -922,14 +924,6 @@ Causal_t
 MarketDNA_t
 ↓
 次Evaluation Cycle
-```
-
-禁止:
-
-```text
-FeaturePriority_t
-→ MarketDNA_t
-→ FeaturePriority_t
 ```
 
 ---
@@ -1289,7 +1283,6 @@ uncertainty:
 - Signalを直接生成しない
 - `evaluation_cycle_id = t` で生成されたMarketDNAは、同じ`t`のFeaturePriorityProfile入力に使用しない
 - 当該MarketDNAは確定後、次Evaluation Cycle以降で`previous_confirmed_dna_ref`として参照可能になる
-- `previous_market_dna_ref`を保持する場合も、Current DNAとの世代関係を示すためであり、同Cycle再帰計算の許可を意味しない
 
 ---
 
@@ -1361,6 +1354,8 @@ Missed Opportunity
 Defense Block
 Supervisor Warning
 Execution Anomaly
+Entry Snapshot Integrity / Timing Gap
+Live Evidence Incomplete / Divergence
 Data Quality Anomaly
 Event Detection Miss / False Positive
 Production Thesis Applicability / Composition Gap
@@ -1495,9 +1490,8 @@ created_at:
 ## Invariants
 
 - 失敗結果も保存する
-- Historical / OOS / Regime / Replay / Demo等の違いを理由に `HistoricalValidationResult` 等の別Result Objectを乱立させない
+- Historical / OOS / Regime / Replay / Demo等の違いを理由に別Result Objectを乱立させない
 - 研究経路は `ResearchTrial.experiment_mode`、`evidence_source_channel`、Trial参照で区別する
-- Stress固有の境界情報が必要な場合は、ResearchResultとTrace可能な `StressResult` / `FailureBoundary` を併用できる
 
 ---
 
@@ -1530,7 +1524,7 @@ created_at:
 
 ## Invariants
 
-Historical 4200 + Demo 420 + Live 28を単純4648件として扱わない。
+Historical / Demo / Liveを単純合算しない。
 
 ---
 
@@ -1976,13 +1970,13 @@ Knowledge Promotion / Production
 ```yaml
 pool_entry_id:
 hypothesis_or_edge_ref:
-hypothesis_state_ref:         # Hypothesis / Edge側のLifecycle State参照
-production_stage:             # RESEARCH_ONLY / SHADOW / DEMO_FORWARD / MICRO_LIVE / LIMITED_LIVE / NORMAL_LIVE / PAUSED
+hypothesis_state_ref:
+production_stage:
 applicability_ref:
 constraint_refs: []
 assessment_profile_ref:
 evidence_package_ref:
-max_production_stage:         # Policy上許可される最大Production Promotion Stage
+max_production_stage:
 expires_or_review_due_at:
 ```
 
@@ -1990,21 +1984,15 @@ expires_or_review_due_at:
 
 ```text
 Hypothesis Lifecycle
-DRAFT / RESEARCHING / SUPPORTED / WEAK / APPROVED / ACTIVE / ...
-
 ≠
-
 Production Promotion Stage
-RESEARCH_ONLY / SHADOW / DEMO_FORWARD / MICRO_LIVE / LIMITED_LIVE / NORMAL_LIVE / PAUSED
 ```
 
 ## Invariants
 
 - `SUPPORTED` と `DEMO_FORWARD` を同じstatus列挙へ入れない
-- `APPROVED` はKnowledge / Hypothesisの承認状態であり、現在市場で即取引可能という意味ではない
-- Productionは `hypothesis_state_ref`、`production_stage`、Applicability、Constraint、Risk Stateを別々に確認する
-- 未承認Hypothesis / EdgeをProductionが自由に有効化しない
-- `max_production_stage` をRisk Stateと混同しない
+- `APPROVED` は現在市場で即取引可能という意味ではない
+- ProductionはLifecycle / Production Stage / Applicability / Constraint / Risk Stateを別々に確認する
 
 ---
 
@@ -2012,14 +2000,11 @@ RESEARCH_ONLY / SHADOW / DEMO_FORWARD / MICRO_LIVE / LIMITED_LIVE / NORMAL_LIVE 
 
 ## Meaning
 
-Approved / production-eligibleなHypothesis / Edgeのうち、現在のMarketContext / MarketDNA / Applicability / Constraint / Quality等へ実際に適用可能なものを役割付きで束ねたImmutable Production Object。
+Approved / production-eligibleなHypothesis / Edgeのうち、現在市場へ実際に適用可能なものを役割付きで束ねたImmutable Production Object。
 
 ## Owner / Generator
 
 `ROLE-PRD-001: Production Thesis Builder`
-
-Knowledge PromotionはApproved Poolを供給するが、現在市場でのApplicable Setを直接生成しない。
-Signal EngineはApplicableHypothesisSetを利用するが、Canonical Set生成責任を持たない。
 
 ## Roles
 
@@ -2040,18 +2025,15 @@ market_profile_id:
 market_context_ref:
 market_dna_ref:
 horizon:
-
 selected_pool_entry_refs: []
 applicability_profile_refs: []
 assessment_profile_refs: []
 knowledge_lifecycle_refs: []
 production_stage_snapshot:
-
 primary_hypothesis_refs: []
 supporting_hypothesis_refs: []
 conditional_hypothesis_refs: []
 contradicting_hypothesis_refs: []
-
 shared_evidence_map:
 dependency_map:
 redundancy_map:
@@ -2064,41 +2046,13 @@ created_at:
 valid_until:
 ```
 
-## FIX-008 Generation Boundary
-
-```text
-Approved Hypothesis / Edge Pool
-+ Current MarketContext
-+ Current Confirmed MarketDNA
-+ ApplicabilityProfile
-+ Constraint
-+ HypothesisAssessmentProfile
-+ KnowledgeLifecycleProfile
-+ Production Promotion Stage
-+ Quality / Uncertainty
-↓
-Production Thesis Builder
-↓
-ApplicableHypothesisSet
-↓
-TradeThesis
-↓
-Signal Engine
-```
-
 ## Invariants
 
-- `Approved != Applicable`。承認済みでも現在条件に適用できなければSetへ入れない
-- DRAFT / RESEARCHING / 未承認HypothesisをLive用ApplicableHypothesisSetへ入れない
-- Production Promotion Stage / `max_production_stage` を超えた利用を許可しない
-- 仮説数の多数決でDirectionを決めない
-- PRIMARY / SUPPORTING / CONDITIONAL / CONTRADICTINGの意味を保持する
-- Shared Evidenceを複数Hypothesisの独立Evidenceとして二重評価しない
-- Dependency / Redundancy / Common Causeを隠さない
-- Constraint違反を単なる弱い減点として隠さない
-- Knowledge Aging / Staleness / Revalidation requirementを無視しない
-- Set生成時点のBuilder Versionと参照したMarketContext / MarketDNA / Applicability / Lifecycle / Production Stageを追跡可能にする
-- 生成後に現在Knowledgeが変化しても過去Setを無言で書き換えない
+- `Approved != Applicable`
+- 未承認HypothesisをLive Setへ入れない
+- 多数決でDirectionを決めない
+- Shared Evidence / Dependency / Redundancy / Common Causeを隠さない
+- Constraint / Aging / Production Stageを無視しない
 
 ---
 
@@ -2106,13 +2060,11 @@ Signal Engine
 
 ## Meaning
 
-Production Thesis BuilderがApplicableHypothesisSetを現在市場で検討可能な一つの取引論拠へ構成したImmutable Object。TradeThesisは「何を期待しているか」を表すが、最終的な`BUY / SELL / NO_TRADE` Decisionそのものではない。
+Production Thesis BuilderがApplicableHypothesisSetを現在市場で検討可能な一つの取引論拠へ構成したImmutable Object。最終的な`BUY / SELL / NO_TRADE` Decisionそのものではない。
 
 ## Owner / Generator
 
 `ROLE-PRD-001: Production Thesis Builder`
-
-Signal EngineはTradeThesisを評価して`SignalDecision`を生成するConsumerであり、TradeThesisのCanonical Generatorではない。
 
 ## Main Fields
 
@@ -2124,24 +2076,20 @@ market_profile_id:
 market_context_ref:
 market_dna_ref:
 hypothesis_set_ref:
-
 expected_direction:
 expected_effect:
 expected_horizon:
 expected_value_profile:
-
 primary_hypothesis_refs: []
 supporting_hypothesis_refs: []
 conditional_hypothesis_refs: []
 contradicting_hypothesis_refs: []
-
 supporting_evidence_refs: []
 contradiction_refs: []
 shared_evidence_map:
 dependency_map:
 redundancy_map:
 common_cause_map:
-
 main_risks: []
 invalidation_conditions: []
 constraint_refs: []
@@ -2151,34 +2099,12 @@ created_at:
 valid_until:
 ```
 
-## FIX-008 Meaning Boundary
-
-```text
-ApplicableHypothesisSet
-= 今の市場で利用可能なApproved Hypothesis / Edgeを役割付きで束ねたもの
-
-TradeThesis
-= そのSetから、何を・なぜ・どのHorizonで期待するかを構成した論拠
-
-SignalDecision
-= そのTradeThesisに対して実際にBUY / SELL / NO_TRADEを判断したDecision
-```
-
 ## Invariants
 
-- `Approved != Applicable != Trade-worthy` を崩さない
 - TradeThesisは複数仮説の平均・多数決ではない
-- TradeThesisは必ずCanonical `ApplicableHypothesisSet` を参照する
 - 新しいAI案・未検証Hypothesisをその場で追加しない
-- Shared Evidenceを重複加点しない
-- Dependency / Redundancy / Common Causeを消さない
-- Contradicting Hypothesis / Contradictionを都合よく削除しない
-- Constraint / Quality / Uncertaintyを保持する
-- `expected_direction` は論拠上の期待方向であり、`SignalDecision.decision` と同一ではない
-- Production Thesis BuilderはTradeThesisから直接注文を生成しない
+- `expected_direction` と `SignalDecision.decision` を同一視しない
 - SignalとTrade Thesisを同一Objectにしない
-- TradeThesisを構成できない場合、情報を捏造して空・弱いThesisを生成しない。`THESIS_NOT_BUILDABLE` はTradeThesis ObjectそのものではなくDiagnostics / Processing Contract上の非成立結果として扱う
-- Builder Versionと入力参照を保持し、過去Tradeで当時のThesis構成を再現可能にする
 
 ---
 
@@ -2211,9 +2137,7 @@ new_research_candidate_refs: []
 
 ## Invariants
 
-AI ReviewはAdvisory。AI停止時も本番経路を成立可能にする。
-
-AIが新しいHypothesisを提案しても、現在TradeThesisへ直接追加せずResearchCandidateへ送る。
+AI ReviewはAdvisory。AIが新Hypothesisを提案しても現在TradeThesisへ直接追加しない。
 
 ---
 
@@ -2247,9 +2171,7 @@ valid_until:
 ## Invariants
 
 - 万能総合点だけで決めない
-- NO_TRADEも必要に応じて研究可能なDecisionとして保存する
-- Signal EngineはApplicableHypothesisSet / TradeThesisのCanonical Generatorではない
-- `THESIS_NOT_BUILDABLE` と `NO_TRADE` を混同しない。前者は有効Thesisが成立していない状態、後者は有効Thesisを評価したうえでRiskを取らないDecision
+- `THESIS_NOT_BUILDABLE` と `NO_TRADE` を混同しない
 
 ---
 
@@ -2286,9 +2208,7 @@ created_at:
 
 ## Invariants
 
-Signal = 取りたいか。
-Defense = 今取ってよいか。
-両者を統合しない。
+Signal = 取りたいか。Defense = 今取ってよいか。両者を統合しない。
 
 ---
 
@@ -2334,24 +2254,23 @@ review_condition:
 
 損失発生後だけでなく、Edge / Data / Execution劣化もRisk縮小理由になり得る。
 
-数値閾値はResearch / Risk Designで別途定義する。
-
 ---
 
 # OBJ-PRD-008: OrderIntent
 
 ## Meaning
 
-Productionの判断を取引所非依存の注文意図として表すObject。
+EntryThesisで固定されたProduction判断を、取引所非依存の注文意図として表すImmutable Object。
 
-## Owner
+## Owner / Generator
 
-Execution Logic
+`ROLE-EXEC-001: Execution Logic / Order Planning`
 
 ## Main Fields
 
 ```yaml
 order_intent_id:
+entry_thesis_ref:
 trade_thesis_ref:
 signal_decision_ref:
 defense_decision_ref:
@@ -2369,7 +2288,10 @@ expires_at:
 
 ## Invariants
 
-Exchange固有payloadをCoreへ漏らさない。
+- Exchange固有payloadをCoreへ漏らさない
+- `entry_thesis_ref` を持たないProduction OrderIntentを生成しない
+- EntryThesis生成失敗時にOrderIntentを作らない
+- OrderIntent生成後にEntryThesisを事後改変しない
 
 ---
 
@@ -2379,9 +2301,9 @@ Exchange固有payloadをCoreへ漏らさない。
 
 OrderIntentがExchange Adapterでどう送信・約定されたかを記録する実行証拠Object。
 
-## Owner
+## Owner / Generator
 
-Exchange Adapter / Execution
+`ROLE-ADP-002: Exchange Adapter`
 
 ## Main Fields
 
@@ -2406,7 +2328,8 @@ diagnostics_ref:
 
 ## Invariants
 
-Strategy OutcomeとExecution Outcomeを分離可能にする。
+- Strategy OutcomeとExecution Outcomeを分離可能にする
+- ExecutionRecordは「注文がどう実行されたか」の一次実行証拠であり、ProductionEvidenceそのものではない
 
 ---
 
@@ -2414,11 +2337,25 @@ Strategy OutcomeとExecution Outcomeを分離可能にする。
 
 ## Meaning
 
-実際にPositionへ入る直前 / 入った時点のTrade Thesis・Evidence・Versionを固定する不変Snapshot。
+実際にOrderIntentを生成してRiskを取りに行く直前に、TradeThesis・Hypothesis Set・市場状態・Signal・Defense・Risk・Constraint・Versionを固定するImmutable Entry Snapshot。
 
-## Owner
+## Owner / Generator
 
-Production / Logger
+`ROLE-EXEC-001: Execution Logic / Entry Snapshot Builder`
+
+## Custodian
+
+`ROLE-LOG-001: Logger`
+
+Loggerは生成済みEntryThesisを改変せず保存する。Canonical生成責任を持たない。
+
+## Consumers
+
+- Order Planning / Execution Logic
+- Position Supervisor
+- Logger
+- Post-Trade Analysis
+- Research
 
 ## Main Fields
 
@@ -2438,13 +2375,41 @@ constraint_refs: []
 signal_decision_ref:
 defense_decision_ref:
 risk_state_ref:
-entry_time:
+entry_snapshot_at:
+snapshot_builder_version:
+quality_ref:
 uncertainty:
+trace_id:
+```
+
+## FIX-009 Generation Boundary
+
+```text
+TradeThesis
+↓
+SignalDecision
+↓
+DefenseDecision
+↓
+RiskState / Current Market references確認
+↓
+Entry Snapshot Builder
+↓
+EntryThesis
+↓
+OrderIntent
 ```
 
 ## Invariants
 
-Entry後に「当時の理由」を書き換えない。
+- EntryThesisはTradeThesisそのものではなく、実際にRiskを取る直前の判断根拠Snapshot
+- EntryThesis生成前にOrderIntentを作らない
+- `SignalDecision` / `DefenseDecision` / `RiskState` / `TradeThesis` / `ApplicableHypothesisSet`へのTraceを失わない
+- `entry_snapshot_at` と `snapshot_builder_version` を保持する
+- Entry後にMarketDNA / Hypothesis State / Evidence / TradeThesisが更新されてもEntryThesisを書き換えない
+- Snapshot生成時に不足した必須情報を推測して埋めない
+- `ENTRY_SNAPSHOT_NOT_BUILDABLE` の場合はOrderIntent生成を禁止する
+- Correctionが必要な場合も元Snapshotを無言で上書きせず、Correction / Superseded関係を使う
 
 ---
 
@@ -2467,8 +2432,6 @@ CAUTION
 THESIS_WEAKENING
 THESIS_INVALIDATED
 ```
-
-EMERGENCYはIn-Trade Defense側のSafety状態として分離する。
 
 ## Main Fields
 
@@ -2527,33 +2490,77 @@ Position Supervisorの助言と最終Exit判断を分離する。
 
 ## Meaning
 
-実市場でしか得られない約定・摩擦・実行現実性を含むLive Evidence。
+ExecutionRecordとLive市場文脈から、実市場でしか得られない約定品質・Slippage・Fee・Funding・Partial Fill・Liquidity Impact・Latency等を構造化したImmutable LIVE Evidence Object。
 
-## Owner
+## Owner / Generator
 
-Execution / Logger / Post-Trade
+`ROLE-EXEC-001: Execution Domain / Live Evidence Collector`
+
+Exchange AdapterはExecutionRecordを生成するが、ProductionEvidenceのSemantic Generatorではない。
+
+## Custodian
+
+`ROLE-LOG-001: Logger`
+
+## Analyzer / Consumer
+
+`ROLE-ANL-001: Post-Trade Analysis` / Research / Knowledge Domain
+
+Post-TradeはProductionEvidenceを分析するが、元Evidenceを生成・改変しない。
 
 ## Main Fields
 
 ```yaml
 production_evidence_id:
 trade_id:
+entry_thesis_ref:
 trade_thesis_ref:
 execution_record_refs: []
+market_context_ref:
+market_event_refs: []
 fill_quality:
 slippage:
 fees:
 funding:
-partial_fill:
+partial_fill_state:
 liquidity_impact:
 exchange_latency:
-market_event_refs: []
+evidence_source_channel: LIVE
+evidence_builder_version:
+evidence_completeness:
+quality_ref:
+uncertainty:
+diagnostics_ref:
 created_at:
+trace_id:
+```
+
+## FIX-009 Generation Boundary
+
+```text
+ExecutionRecord
++ EntryThesis / TradeThesis
++ Live Market / Fee / Funding / Liquidity context
+↓
+Live Evidence Collector
+↓
+ProductionEvidence
+↓
+Logger / Immutable Storage
+↓
+Post-Trade Analysis
 ```
 
 ## Invariants
 
-Historical / Demo Evidenceへ混ぜず、LIVE Channelとして保持する。
+- `ExecutionRecord != ProductionEvidence`
+- `evidence_source_channel = LIVE` を保持し、Historical / Demo Evidenceへ無言で混ぜない
+- LoggerはProductionEvidenceを保存するだけでSemantic生成しない
+- Post-TradeはProductionEvidenceを分析するだけで元Evidenceを再生成・改変しない
+- Live Evidenceの一部が取得不能でも取引事実を削除しない
+- 不完全時は`evidence_completeness / quality_ref / diagnostics_ref`でDEGRADED / INCOMPLETE相当を表現し、推測値で補完しない
+- Actual Slippage / Fee / Funding等とDemo / Historical推定値を別Channelとして比較可能にする
+- `evidence_builder_version`を保存し、後から抽出Logicを再現可能にする
 
 ---
 
@@ -2571,7 +2578,7 @@ Logger / Post-Trade
 
 ```yaml
 trade_id:
-trial_id:                  # Demo / Researchなら使用
+trial_id:
 experiment_mode:
 evidence_source_channel:
 entry_thesis_ref:
@@ -3131,7 +3138,7 @@ Historical Evidence
 ≠ Live Production Evidence
 ```
 
-EvidencePackageで束ねることはできるが、元Channelを消して統合しない。
+ProductionEvidenceは必ずLIVE Channelの出所を保持する。
 
 ---
 
@@ -3139,25 +3146,19 @@ EvidencePackageで束ねることはできるが、元Channelを消して統合�
 
 同じ概念でも、現在値と過去Snapshotを区別する。
 
-例:
-
 ```text
 Current MarketDNA
-= 現在参照している市場状態
-
-MarketDNA Snapshot
-= 過去Case / Trade時点で固定されたDNA
+≠
+EntryThesisに固定されたEntry時点MarketDNA reference
 ```
 
 ```text
 Current Hypothesis status
-= 現時点のKnowledge状態
-
-EntryThesis.hypothesis_version
-= Entry時点に実際に使ったHypothesis状態
+≠
+EntryThesisに固定されたEntry時点Hypothesis / Set / Thesis Version
 ```
 
-ApplicableHypothesisSet / TradeThesisも生成時点のMarketContext / MarketDNA / Knowledge / Builder Versionを固定し、後から現在Knowledgeが変わっても過去Production判断を無言で書き換えない。
+ApplicableHypothesisSet / TradeThesis / EntryThesisはそれぞれ生成時点の情報を保持し、後から現在Knowledgeが変わっても過去Production判断を無言で書き換えない。
 
 ---
 
@@ -3165,31 +3166,32 @@ ApplicableHypothesisSet / TradeThesisも生成時点のMarketContext / MarketDNA
 
 同じ情報を複数Objectへ全文コピーするより、ID参照を基本とする。
 
-例:
-
 ```text
-TradeThesis
+OrderIntent
+→ EntryThesis
+→ TradeThesis
 → ApplicableHypothesisSet
 → hypothesis_id / edge_id
-→ evidence_id
-→ feature_id / market_event_id
-→ raw_data_id
 ```
 
-ただし、EntryThesis等の監査・再現に重要なSnapshotでは、必要最小限のValueを同時固定してよい。
-
-この境界はData Contract / DB Schemaで確定する。
+EntryThesis等の監査・再現に重要なSnapshotでは、必要最小限のValue / Versionを同時固定してよい。
 
 ---
 
 # 10. Provenance Chain
 
-主要判断Objectは最低限次の経路を逆引きできることを目標とする。
+主要判断・実行Objectは最低限次の経路を逆引きできることを目標とする。
 
 ```text
 TradeResult
 ↓
+ProductionEvidence / ExecutionRecord
+↓
+OrderIntent
+↓
 EntryThesis
+↓
+DefenseDecision
 ↓
 SignalDecision
 ↓
@@ -3205,29 +3207,19 @@ MarketContext / MarketDNA
 ↓
 MarketEvent / Feature
 ↓
-Event Detection Rule / FormulaDefinition / MeasurementResult
-↓
-Observation / TimeSeriesMeasurement
-↓
-RawData
-↓
-SourceMetadata
+Observation / RawData / SourceMetadata
 ```
+
+ProductionEvidence自体も`ExecutionRecord + EntryThesis + Live Context`まで逆引き可能にする。
 
 ---
 
 # 11. Forward Impact Chain
 
-長期運用では逆引きだけでなく、上流障害が下流へ何を壊すか追跡する。
-
 ```text
 Source Failure
 ↓
-Affected Observation
-↓
-Affected Feature / Event Detection
-↓
-Affected MarketEvent / Evidence
+Affected Observation / Feature / Event
 ↓
 Affected Hypothesis / Applicability
 ↓
@@ -3235,16 +3227,16 @@ Affected ApplicableHypothesisSet
 ↓
 Affected TradeThesis
 ↓
-Affected Active Position
+Affected EntryThesis candidate
+↓
+Order / Active Position
 ```
 
-これを新Layerとして作るのではなく、Object Relationship / Trace / Dependency情報で実現する。
+Entry後はEntryThesisを書き換えず、影響はCurrent State / Position Supervisor / Defense / Incident側で扱う。
 
 ---
 
 # 12. Objectを勝手に統合しない組み合わせ
-
-以下は意味が異なるため、安易に一Objectへ統合しない。
 
 ```text
 Observation ≠ MarketEvent
@@ -3262,20 +3254,24 @@ ApplicableHypothesisSet ≠ TradeThesis
 TradeThesis ≠ SignalDecision
 SignalDecision ≠ DefenseDecision
 TradeThesis ≠ EntryThesis
+EntryThesis ≠ OrderIntent
+OrderIntent ≠ ExecutionRecord
+ExecutionRecord ≠ ProductionEvidence
+ProductionEvidence ≠ Post-Trade Analysis Result
 PositionThesisState ≠ ExitDecision
 TradeResult ≠ TradeThesisEvaluation
-TradeResult ≠ HypothesisAttribution
 ErrorEvent ≠ Failure Knowledge
 ```
 
-特にFIX-008では次を固定する。
+FIX-009では特に:
 
 ```text
-Approved Knowledge
-≠ ApplicableHypothesisSet
-≠ TradeThesis
-≠ SignalDecision
+Generator
+≠ Custodian
+≠ Analyzer
 ```
+
+を固定する。
 
 ---
 
@@ -3288,6 +3284,7 @@ MarketDNA
 ApplicableHypothesisSet
 TradeThesis
 EntryThesis
+ProductionEvidence
 EvidencePackage
 FailureBoundary
 Constraint
@@ -3295,9 +3292,7 @@ ResearchCandidate
 RiskState
 ```
 
-Role Dictionaryに独立責任主体が定義されている場合のみRole / Module化を検討する。
-
-ApplicableHypothesisSetとTradeThesisはFIX-008で`Production Thesis Builder`が生成するが、両Objectを別々のTop-Level Layerへ昇格させない。
+EntryThesis / ProductionEvidenceの生成処理はFIX-009でExecution Domain内部Submoduleへ割り当てるが、Object自体を新Top-Level Layerへ昇格させない。
 
 ---
 
@@ -3316,8 +3311,6 @@ ApplicableHypothesisSetとTradeThesisはFIX-008で`Production Thesis Builder`が
 8. 何十年保存する意味があるか
 ```
 
-独立ID / Lifecycle / Version / Ownerが不要なら、新Objectを増やさない。
-
 ---
 
 # 15. Object変更ルール
@@ -3332,23 +3325,12 @@ Objectの意味・必須Field・Lifecycle・Ownerを変更する場合:
 6. Production Snapshot再現性を確認する
 7. Migration / Rollback Planを作る
 
-単なるPython class変更だけでSemantic Object定義を勝手に変えない。
-
 ---
 
 # 16. Object LifecycleとSTATE_DICTIONARYの関係
 
 本書はObjectの意味を定義する。
-
-Stateの正式語彙・遷移は後続の:
-
-```text
-01_DICTIONARY/STATE_DICTIONARY.md
-```
-
-をSingle Source of Truth候補とする。
-
-本書に書かれているState一覧は現時点の候補であり、STATE_DICTIONARY作成時に重複・矛盾を整理する。
+Stateの正式語彙・遷移は `01_DICTIONARY/STATE_DICTIONARY.md` をSingle Source of Truth候補とする。
 
 ---
 
@@ -3372,17 +3354,25 @@ Object = 何の情報か
 
 を定義する。
 
-Object Dictionary内へRole間通信規則を過剰に埋め込まない。
+FIX-009で決めた次はData / Processing Contractで型・必須条件を固定する。
 
-FIX-008で決めた`THESIS_NOT_BUILDABLE`の具体的なResult表現、Required / Nullable、Build失敗時の受け渡し、Builder Version型、Set / ThesisのCardinalityはData / Processing Contractで固定する。
+```text
+EntryThesis required references / nullability
+ENTRY_SNAPSHOT_NOT_BUILDABLEのResult表現
+EntryThesis → OrderIntent hard gate
+entry_snapshot_atとOrderIntent.created_at / ExecutionRecord.submitted_atの時系列制約
+ProductionEvidence completeness / quality表現
+ExecutionRecord → ProductionEvidence cardinality
+LIVE Channel固定
+Logger Custody Contract
+Post-Trade Read-only Consumer Contract
+```
 
 ---
 
 # 18. ObjectとDATABASE_SCHEMAの関係
 
 本書のObjectとDB Tableを1:1固定しない。
-
-例:
 
 ```text
 Logical Object
@@ -3396,37 +3386,17 @@ evidence_links table
 
 のように分割される可能性がある。
 
-DB Schemaは後からStorage効率・Query・Migrationを考えて決める。
-
-重要:
-
-> Semantic ObjectがDB都合で壊れないこと。
-
 ---
 
 # 19. ObjectとPython Modelの関係
 
 本書のObjectとPython classを1:1永久固定しない。
 
-実装時には例として:
-
-```text
-Pydantic Model
-Dataclass
-ORM Model
-TypedDict
-Event Schema
-```
-
-等へ落とせる。
-
-ただしコード側の命名と意味は本辞書へ従う。
+実装時にはPydantic / Dataclass / ORM / TypedDict等へ落とせるが、命名と意味は本辞書へ従う。
 
 ---
 
 # 20. Storage Lifecycle区分
-
-Objectごとに将来Retention Classを付与する。
 
 候補:
 
@@ -3439,55 +3409,19 @@ EPHEMERAL
 IMMUTABLE_LONG_TERM
 ```
 
-例:
-
-```text
-Recent Observation
-→ HOT / WARM
-
-Old compressed Raw
-→ COLD / ARCHIVE
-
-Cache
-→ EPHEMERAL
-
-Important Hypothesis / Failure / Trade / Knowledge
-→ IMMUTABLE_LONG_TERM候補
-```
-
-具体的保存期間は `STORAGE.md` / Long-Term Governanceで決める。
+EntryThesis / ProductionEvidence / ExecutionRecord / TradeResultは監査・研究価値が高いため長期Immutable保存候補。
 
 ---
 
 # 21. Knowledge Aging共通原則
 
-長期Knowledge Objectは最低限、可能なものについて:
-
-```text
-created_at
-last_validated_at
-revalidation_due_at
-status
-staleness
-```
-
-を追跡できるようにする。
+長期Knowledge Objectは`created_at / last_validated_at / revalidation_due_at / status / staleness`等を追跡可能にする。
 
 古い = 無効ではない。
-
-ただし:
-
-> 長期間再検証されていない = 不確実性が増えている可能性
-
-として扱う。
-
-Production Thesis BuilderはKnowledge Agingを無視してApplicableHypothesisSetへ採用しない。
 
 ---
 
 # 22. Object Definition of Done
-
-一つの重要Objectを完全設計済みとみなす最低条件:
 
 ```text
 □ Object ID / Name
@@ -3511,8 +3445,6 @@ Production Thesis BuilderはKnowledge Agingを無視してApplicableHypothesisSe
 □ Migration consideration
 □ Failure / invalid object handling
 ```
-
-本辞書はSemantic Levelの完全設計候補であり、各Objectの型・nullability・enum・index等はData Contract / DB Schemaでさらに固定する。
 
 ---
 
@@ -3538,7 +3470,7 @@ MarketEvent
 TimeSeriesMeasurement
 ```
 
-`NormalizedObservation` はFIX-001で `Observation` へ統合済み。旧 `OBJ-DATA-004` は履歴用Tombstoneとしてのみ保持する。
+`NormalizedObservation` はFIX-001で `Observation` へ統合済み。
 
 ## Measurement / Feature
 
@@ -3646,55 +3578,40 @@ AuditEvent
 
 # 24. 現時点で意図的にObject化しないもの
 
-以下は現段階では独立Persistent Objectとして確定しない。
-
 ```text
 Case Library
 Market Memory
 Failure Museum
 Knowledge Graph
 THESIS_NOT_BUILDABLE
+ENTRY_SNAPSHOT_NOT_BUILDABLE
 ```
 
 理由:
 
 - Case Library / Market Memory / Failure Museum / Knowledge Graph = Knowledge DomainのView
-- `THESIS_NOT_BUILDABLE` = FIX-008時点ではTradeThesisとは別Objectを新設せず、BuilderのDiagnostics / Processing Contract上の非成立結果として扱う
+- `THESIS_NOT_BUILDABLE` = BuilderのDiagnostics / Processing Contract上の非成立結果
+- `ENTRY_SNAPSHOT_NOT_BUILDABLE` = Entry Snapshot BuilderのDiagnostics / Processing Contract上のHard Gate非成立結果
 
-また:
-
-```text
-RANDOM_BASELINE
-HISTORICAL
-REPLAY
-PAPER
-DEMO_FORWARD
-SHADOW
-COUNTERFACTUAL
-```
-
-はExperiment Modeであり、Objectではない。
-
-`DemoForwardTrial` を別Objectとして乱立させず、基本は `ResearchTrial + experiment_mode = DEMO_FORWARD` として表現する。
+また`RANDOM_BASELINE / HISTORICAL / REPLAY / PAPER / DEMO_FORWARD / SHADOW / COUNTERFACTUAL`はExperiment ModeでありObjectではない。
 
 ---
 
 # 25. 未確定・次文書へ送る論点
 
-以下は本辞書で名前と意味を整理するが、最終仕様は後続文書で確定する。
-
 1. 正式State一覧 → `STATE_DICTIONARY.md`
 2. Market DNAとRegimeの正式依存関係 → Architecture / State設計
-3. **Feature Priorityが参照するDNAの時系列原則はFIX-006で確定済み。Field型・Required/Nullable・Cycle境界Validationは `DATA_CONTRACT.md` / Data Flowで固定する**
-4. **MarketEventのCanonical生成責任はFIX-007でEvent Detection Processorへ確定済み。Event Field型・Detection Rule参照型・Dedup/Cardinality・Detector HealthのContractは `DATA_CONTRACT.md` / Data Flowで固定する**
-5. **ApplicableHypothesisSet / TradeThesisのCanonical生成責任はFIX-008でProduction Thesis Builderへ確定済み。Builder Input Contract、Selection Cardinality、Builder Version型、`THESIS_NOT_BUILDABLE`表現、Set→Thesis→Signal受け渡しは `DATA_CONTRACT.md` / Processing / Trade Thesis Contractで固定する**
-6. Soft / Hard ContradictionのProduction Gate → Production Contract
-7. Risk Stateの閾値 → Risk Design / Research
-8. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
-9. Object間Cardinality → `DATA_CONTRACT.md` / `DATABASE_SCHEMA.md`
-10. Retention期間 → Storage Governance
-11. Encryption / Secret分類 → Security Design
-12. Schema Migration実装 → Version / Migration Design
+3. Feature Priority Cycle Field型 / Validation → `DATA_CONTRACT.md`
+4. MarketEvent Detection Rule / Dedup / Cardinality → `DATA_CONTRACT.md`
+5. ApplicableHypothesisSet / TradeThesis Builder Contract → `DATA_CONTRACT.md` / Trade Thesis Contract
+6. **EntryThesis / ProductionEvidence生成責任はFIX-009で確定済み。Entry Snapshot hard gate、OrderIntent必須参照、時系列制約、Live Evidence completeness、ExecutionRecordとのCardinality、Logger Custody / Post-Trade read-only境界は `DATA_CONTRACT.md` / Processing Contractで固定する**
+7. Soft / Hard ContradictionのProduction Gate → Production Contract
+8. Risk Stateの閾値 → Risk Design / Research
+9. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
+10. Object間Cardinality → `DATA_CONTRACT.md` / `DATABASE_SCHEMA.md`
+11. Retention期間 → Storage Governance
+12. Encryption / Secret分類 → Security Design
+13. Schema Migration実装 → Version / Migration Design
 
 ---
 
@@ -3713,5 +3630,9 @@ COUNTERFACTUAL
 > **Knowledgeは長期に残る。**
 >
 > **Codeはこれらを実装する手段であり、意味の正本ではない。**
+
+FIX-009ではさらに:
+
+> **GeneratorはObjectを作る。Custodianは改変せず保存する。Analyzerは後から意味を分析する。**
 
 何十年以上運用するため、Python・DB・Exchange・AI Providerが変わっても、Objectの意味・Version・Provenance・Research履歴・Trade判断履歴を失わない設計を優先する。
