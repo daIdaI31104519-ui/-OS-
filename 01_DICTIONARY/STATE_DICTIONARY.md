@@ -184,14 +184,13 @@ StateTransitionEvent
 例:
 
 ```text
-H-101 current_state = ACTIVE
-latest_transition_event_ref = STE-0004
+H-101 current_state = APPROVED
+latest_transition_event_ref = STE-0003
 
 History:
 STE-0001 DRAFT → RESEARCHING
 STE-0002 RESEARCHING → SUPPORTED
 STE-0003 SUPPORTED → APPROVED
-STE-0004 APPROVED → ACTIVE
 ```
 
 Current Stateだけを上書きして過去履歴を失わない。
@@ -299,18 +298,6 @@ expected_previous_state
 
 と実Current Stateの一致を検証できるようにする。
 
-例:
-
-```text
-Process A reads ACTIVE
-Process B reads ACTIVE
-
-A applies ACTIVE → SUSPENDED
-B later tries ACTIVE → RETIRED
-```
-
-BはCurrentが既にSUSPENDEDなら古いACTIVE前提のTransitionとして拒否できること。
-
 具体的Compare-And-Set / Transaction方式はData / Processing Contract / DB Schemaで固定する。
 
 ## RULE-STATE-010: transition_sequenceで順序を確定可能にする
@@ -328,7 +315,7 @@ Timestampだけに依存して遷移順序を曖昧にしない。
 ```text
 A. HYPOTHESIS / EDGE LIFECYCLE
 B. RESEARCH LIFECYCLE
-C. KNOWLEDGE LIFECYCLE
+C. KNOWLEDGE LIFECYCLE / HEALTH
 D. PRODUCTION PROMOTION / RISK
 E. POSITION / TRADE THESIS
 F. RUNTIME / HEALTH
@@ -344,6 +331,83 @@ Git / Designの `IDEA / PROPOSAL / CANONICAL` 等は `GIT_RULES.md` を正本と
 
 ---
 
+# 6.1 FIX-012: Research Maturity / Knowledge Health / Production Permission / Risk Permission の完全分離
+
+FIX-012では次の4軸を独立State Machine / State Projectionとして扱う。
+
+```text
+1. Hypothesis / Edge Lifecycle
+= 研究・知識としてどこまで成熟したか
+
+2. Knowledge Aging / Health
+= その知識が現在どれだけ新鮮・再検証済み・健全か
+
+3. Production Promotion Stage
+= そのKnowledgeをProductionでどこまで使うことを許可されているか
+
+4. Risk State
+= OS / Market Instance / Portfolioとして現在どこまでRiskを取ってよいか
+```
+
+正式原則:
+
+```text
+Research maturity
+≠ Knowledge freshness / health
+≠ Production permission
+≠ Current OS risk permission
+```
+
+一つの`status`へ圧縮しない。
+
+例:
+
+```text
+Edge Lifecycle = APPROVED
+Knowledge Aging / Health = DEGRADED
+Production Promotion = PAUSED
+Risk State = NORMAL
+```
+
+は合法であり、意味は:
+
+```text
+過去の研究・Approval自体は維持
+現在Knowledge healthは低下
+Production利用は停止
+OS全体Risk環境そのものは通常
+```
+
+となる。
+
+また:
+
+```text
+Hypothesis Lifecycle = APPROVED
+Knowledge Aging / Health = CURRENT
+Production Promotion = NORMAL_LIVE
+Risk State = NO_NEW_ENTRY
+```
+
+も合法であり、この場合KnowledgeはProduction利用可能でもOS Safety Gateにより新規Tradeは禁止される。
+
+StateTransitionEventでは同じKnowledgeに対して別々の履歴を持つ。
+
+```text
+HYPOTHESIS_LIFECYCLE
+RESEARCHING → SUPPORTED
+
+KNOWLEDGE_AGING
+CURRENT → AGING
+
+PRODUCTION_PROMOTION
+LIMITED_LIVE → PAUSED
+```
+
+これらを一つのTransitionとして扱わない。
+
+---
+
 # A. HYPOTHESIS / EDGE LIFECYCLE
 
 # STATE-HYP-001: CausalHypothesis Lifecycle
@@ -352,21 +416,32 @@ Git / Designの `IDEA / PROPOSAL / CANONICAL` 等は `GIT_RULES.md` を正本と
 
 - `CausalHypothesis`
 
-正式候補State:
+FIX-012正式候補State:
 
 ```text
 DRAFT
 RESEARCHING
 SUPPORTED
 WEAK
+CONFLICTED
 APPROVED
-ACTIVE
-AGING
-SUSPENDED
 RETIRED
 REOPENED
-CONFLICTED
 ```
+
+## Meaning Boundary
+
+CausalHypothesis Lifecycleは**研究成熟度・知識としての地位**だけを表す。
+
+次は表さない。
+
+```text
+現在Productionで使っているか
+Knowledgeが古くなったか
+現在Riskを取ってよいか
+```
+
+これらは別State Machineへ送る。
 
 ## DRAFT
 
@@ -381,11 +456,6 @@ CONFLICTED
 
 Research Plan / Trialで検証中。
 
-条件:
-
-- Research Candidate / Planが存在
-- 必要Dataが利用可能
-
 ## SUPPORTED
 
 現在までのResearch Evidenceで一定の支持がある。
@@ -394,68 +464,38 @@ Research Plan / Trialで検証中。
 
 > SUPPORTED = Production利用許可ではない。
 
-HistoricalだけでSUPPORTEDにするか、OOS等を必須にするかはResearch Contractで定義する。
-
 ## WEAK
 
-一部支持は残るが、再現性・Applicability・Evidenceが弱い。
+研究上、支持が弱い・再現性が不足している等の成熟度評価。
 
-用途:
+WEAKをKnowledge Agingの`AGING / STALE / DEGRADED`と混同しない。
 
-- 追加研究
-- Risk縮小候補
-- Production Poolから除外候補
+## CONFLICTED
+
+支持Evidenceと反証Evidenceが強く競合し、単純なSUPPORTED / WEAKへ分類できない。
 
 ## APPROVED
 
-Knowledge Promotion / Approvalを通過し、Production利用候補として承認された。
+Knowledge Promotion / Approvalを通過し、Production利用候補となり得る研究上の地位。
 
 重要:
 
-> APPROVED = 常に現在市場で利用可能、ではない。
-
-Applicability / Constraint / Risk Stateを別途確認する。
-
-## ACTIVE
-
-現在Production Pool等で利用可能な現役Knowledge。
-
-## AGING
-
-長期間再検証されていない、またはEvidenceの鮮度が低下している。
-
-必ずしも誤りではない。
-
-原則:
-
-- Revalidation候補
-- Risk Stage縮小候補
-
-## SUSPENDED
-
-現在利用停止中。
-
-候補理由:
-
-- Edge Health劣化
-- Demo / Live divergence
-- Critical Contradiction
-- Structural Change
-- Data Source問題
-
-再開にはRevalidationを要求できる。
+```text
+APPROVED
+≠ CURRENT
+≠ NORMAL_LIVE
+≠ Risk NORMAL
+```
 
 ## RETIRED
 
-現在の知識として利用終了。
+研究・Knowledgeとして正式に利用対象から退役した状態。
 
-原則Production利用禁止。
-
-ただし履歴は削除しない。
+履歴は削除しない。
 
 ## REOPENED
 
-以前Weak / Suspended / Retired等だった仮説を、新Data・構造変化・新Formula等により再研究対象へ戻した状態。
+WEAK / CONFLICTED / RETIRED等だった仮説を、新Data・構造変化・新Formula等により再研究対象へ戻した状態。
 
 通常:
 
@@ -465,15 +505,21 @@ REOPENED → RESEARCHING
 
 へ進む。
 
-## CONFLICTED
+## FIX-012 Removed / Migrated State Semantics
 
-支持Evidenceと反証Evidenceが強く競合し、単純なSUPPORTED / WEAKへ分類できない。
+```text
+ACTIVE
+→ Hypothesis Lifecycleから除外。
+  Production利用中かどうかはProduction Promotion Stageで表す。
 
-用途:
+AGING
+→ Hypothesis Lifecycleから除外。
+  Knowledge Aging / Health = AGINGで表す。
 
-- Alternative Hypothesis比較
-- Confounder再検証
-- Production利用制限
+SUSPENDED
+→ Hypothesis Lifecycleから除外。
+  Knowledge劣化はKnowledge Aging / Health、Production停止はPAUSEDで表す。
+```
 
 ---
 
@@ -488,23 +534,14 @@ RESEARCHING
   └→ CONFLICTED
 
 SUPPORTED
-  ↓
-APPROVED
-  ↓
-ACTIVE
-
-ACTIVE
-  ├→ AGING
+  ├→ APPROVED
   ├→ WEAK
-  ├→ SUSPENDED
+  └→ CONFLICTED
+
+APPROVED
   └→ RETIRED
 
-AGING
-  ├→ RESEARCHING
-  ├→ ACTIVE
-  └→ SUSPENDED
-
-WEAK / SUSPENDED / RETIRED
+WEAK / CONFLICTED / RETIRED
   ↓ 条件成立
 REOPENED
   ↓
@@ -514,10 +551,10 @@ RESEARCHING
 禁止例:
 
 ```text
-DRAFT → ACTIVE
 DRAFT → APPROVED
 RESEARCHING → NORMAL_LIVE
-RETIRED → ACTIVE  # Reopen / Research / Approvalを飛ばさない
+APPROVED → AGING      # Knowledge Aging側のState
+APPROVED → PAUSED     # Production Promotion側のState
 ```
 
 ---
@@ -528,36 +565,58 @@ RETIRED → ACTIVE  # Reopen / Research / Approvalを飛ばさない
 
 - `Edge`
 
-候補State:
+FIX-012正式候補State:
 
 ```text
 CANDIDATE
 VALIDATING
 SUPPORTED
 APPROVED
-ACTIVE
-DEGRADED
-SUSPENDED
 RETIRED
 REOPENED
 ```
 
-Hypothesis Lifecycleと完全同一にせず、Edgeは再現可能な優位性としての研究・承認・利用成熟度に重点を置く。
+Edge Lifecycleは再現可能な優位性としての**研究・承認成熟度**だけを表す。
 
-重要:
+## FIX-012 Removed / Migrated State Semantics
 
-- `FeatureKnowledge` / `FormulaKnowledge` をEdge Lifecycleへ入れない
-- Feature / Formulaの知識鮮度・再検証必要性は `STATE-KNW-001: Knowledge Aging State` で管理する
-- `Edge` 自身は「Edgeとしての成熟度」と「Knowledgeとしての鮮度」を別State Machineとして同時に持ち得る
+```text
+ACTIVE
+→ Edge Lifecycleから除外。
+  現在Production利用可能かはProduction Promotion Stageで表す。
+
+DEGRADED
+→ Edge Lifecycleから除外。
+  現在のKnowledge health低下はKnowledge Aging / Health = DEGRADEDで表す。
+
+SUSPENDED
+→ Edge Lifecycleから除外。
+  Production利用停止はProduction Promotion = PAUSEDで表す。
+```
 
 例:
 
 ```text
-Edge Lifecycle = ACTIVE
-Knowledge Aging = AGING
+Edge Lifecycle = APPROVED
+Knowledge Aging / Health = AGING
+Production Promotion = LIMITED_LIVE
 ```
 
 は成立する。
+
+基本遷移候補:
+
+```text
+CANDIDATE
+→ VALIDATING
+→ SUPPORTED
+→ APPROVED
+→ RETIRED
+
+RETIRED
+→ REOPENED
+→ VALIDATING
+```
 
 ---
 
@@ -605,13 +664,6 @@ Research Trialが実行中。
 
 一時停止。
 
-候補:
-
-- Data不足
-- Resource Budget不足
-- 他研究優先
-- Source障害
-
 ## COMPLETED
 
 事前定義したCompletion Criteriaを満たした。
@@ -622,13 +674,9 @@ Research Trialが実行中。
 
 Early Stop / Futility / Risk / Resource理由で研究終了。
 
-失敗結果・停止理由を保存する。
-
 ## MERGED
 
 重複Candidateへ統合された。
-
-元Candidateを削除せず、統合先Referenceを残す。
 
 ## REJECTED
 
@@ -712,10 +760,6 @@ DRAFT / READY / ACTIVE / COMPLETED
 
 - `ResearchPlan`
 
-目的:
-
-> PlanのLifecycleとは別に、評価規則・Data Scope・Metric・Stop Rule等を変更してよいかを表す。
-
 正式候補State:
 
 ```text
@@ -730,7 +774,7 @@ FROZEN
 
 ## PRE_REGISTERED
 
-結果を見る前に主要評価条件を事前登録済み。変更には理由・Version更新を要求できる。
+結果を見る前に主要評価条件を事前登録済み。
 
 ## FROZEN
 
@@ -738,24 +782,13 @@ Demo Forward / Holdout等で、T0以降の評価規則を変更禁止とする�
 
 変更が必要なら同じPlanを上書きせず、新Plan Versionを作成する。
 
-### 許可される組み合わせ例
+許可される組み合わせ例:
 
 ```text
 Lifecycle = READY   + Lock = PRE_REGISTERED
 Lifecycle = ACTIVE  + Lock = PRE_REGISTERED
 Lifecycle = ACTIVE  + Lock = FROZEN
 Lifecycle = COMPLETED + Lock = FROZEN
-```
-
-重要:
-
-> `ACTIVE` と `FROZEN` は矛盾しない。前者は研究計画の進行状態、後者は編集可否を表す。
-
-禁止:
-
-```text
-FROZENだからLifecycleもFROZENと扱う
-ACTIVEだから評価Ruleを自由に変更する
 ```
 
 ---
@@ -802,29 +835,18 @@ COMPLETION CRITERIA
 REOPEN CRITERIA
 ```
 
-候補Trigger:
-
-- Unique Market Event数
-- OOS deterioration
-- Repeated contradiction
-- No improvement / futility
-- Resource budget exceeded
-- Duplicate discovery
-- Data source unavailable
-- Structural change
-
 ---
 
-# C. KNOWLEDGE LIFECYCLE
+# C. KNOWLEDGE LIFECYCLE / HEALTH
 
-# STATE-KNW-001: Knowledge Aging State
+# STATE-KNW-001: Knowledge Aging / Health State
 
 対象:
 
 - `KnowledgeLifecycleProfile`
-- Hypothesis / Edge / FeatureKnowledge / FormulaKnowledge / Constraint等
+- Hypothesis / Edge / FeatureKnowledge / FormulaKnowledge / Constraint等の鮮度・健全性評価
 
-候補State:
+FIX-012正式候補State:
 
 ```text
 FRESH
@@ -832,9 +854,14 @@ CURRENT
 AGING
 STALE
 DEGRADED
-SUSPENDED
 ARCHIVED
 ```
+
+## Meaning Boundary
+
+Knowledge Aging / Healthは**知識の現在の鮮度・再検証必要性・最近のEvidenceによる健全性**を表す。
+
+研究成熟度やProduction利用許可、Risk許可は表さない。
 
 ## FRESH
 
@@ -852,19 +879,33 @@ ARCHIVED
 
 長期間再検証されていない。
 
-`FALSE`とは限らないが、ProductionでのTrustを制限できる。
+`FALSE`とは限らないが、Production側でTrustを制限する理由になり得る。
 
 ## DEGRADED
 
-最近のDemo / Live / OOS等で性能劣化が観測された。
-
-## SUSPENDED
-
-Knowledge利用を一時停止。
+最近のOOS / Demo / Live / Stress等で劣化Evidenceが観測された。
 
 ## ARCHIVED
 
-現役利用対象外だが歴史・研究資産として保存。
+現役Knowledge Health評価対象外として長期保管される状態。
+
+## FIX-012 Removed / Migrated State Semantics
+
+```text
+SUSPENDED
+→ Knowledge Aging / Healthから除外。
+  Knowledge health低下はDEGRADED、Production利用停止はPAUSEDで表す。
+```
+
+重要:
+
+```text
+Knowledge = DEGRADED
+```
+
+であっても研究上の`APPROVED`履歴を自動的に消さない。
+
+必要なProduction制限は別State Machineで行う。
 
 ---
 
@@ -887,7 +928,7 @@ SUPERSEDED
 RETIRED
 ```
 
-ConstraintはProduction Safetyへ直接影響するため、未承認Stateを本番Gateへ自動適用しない。
+Constraint LifecycleはConstraint自身のLifecycleであり、FIX-012のHypothesis / Edge成熟度分離とは別である。
 
 ---
 
@@ -910,6 +951,18 @@ MICRO_LIVE
 LIMITED_LIVE
 NORMAL_LIVE
 PAUSED
+```
+
+## Meaning Boundary
+
+Production Promotion Stageは**Production利用許可の段階**だけを表す。
+
+次は表さない。
+
+```text
+研究上どこまで成熟したか
+Knowledgeが古いか・劣化したか
+現在OS全体がRiskを取ってよいか
 ```
 
 ## RESEARCH_ONLY
@@ -938,12 +991,16 @@ T0以降の未来Dataで、Liveと共通ロジックを使い仮想取引検証�
 
 ## PAUSED
 
-本番利用一時停止。
+当該Knowledge / RuleのProduction利用を一時停止。
 
 重要:
 
-> Risk割合・昇格閾値は本State Dictionaryへ固定値として埋め込まない。
-> Research / Risk DesignでVersion付きPolicyとして定義する。
+```text
+PAUSED
+≠ Hypothesisが研究上Retired
+≠ Knowledge healthが必ずDEGRADED
+≠ OS全体RiskがEMERGENCY
+```
 
 ---
 
@@ -963,25 +1020,20 @@ LIMITED_LIVE
 NORMAL_LIVE
 ```
 
-劣化時:
+劣化・Safety・再検証必要時:
 
 ```text
-NORMAL_LIVE
-↓
-LIMITED_LIVE
-↓
-MICRO_LIVE
-↓
-PAUSED
-↓
-RESEARCH_ONLY / RESEARCHING
+NORMAL_LIVE / LIMITED_LIVE / MICRO_LIVE / DEMO_FORWARD / SHADOW
+→ PAUSED
 ```
+
+再開・昇格条件はApproval / Research / Risk ContractでVersion付きに定義する。
 
 原則:
 
 - 昇格は段階を飛ばさない
-- 降格はSafetyのため段階を飛ばしてよい
-- Critical Failureでは `NORMAL_LIVE → PAUSED` を許可
+- 降格・PAUSEDはSafetyのため段階を飛ばしてよい
+- Knowledge Aging / Healthの変化とProduction Promotion遷移は別々のStateTransitionEventとして残す
 
 ---
 
@@ -1003,6 +1055,23 @@ NO_NEW_ENTRY
 EMERGENCY
 ```
 
+## Meaning Boundary
+
+Risk Stateは**現在OS / Market Instance / PortfolioとしてどこまでRiskを取ってよいか**を表す。
+
+個別Hypothesis / EdgeのProduction Promotion Stageとは別である。
+
+例:
+
+```text
+Hypothesis Lifecycle = APPROVED
+Knowledge Aging / Health = CURRENT
+Production Promotion = NORMAL_LIVE
+Risk State = NO_NEW_ENTRY
+```
+
+の場合、新規Tradeは禁止。
+
 ## NORMAL
 
 通常Policy範囲でRiskを許可。
@@ -1010,14 +1079,6 @@ EMERGENCY
 ## CAUTION
 
 警戒状態。
-
-候補Trigger:
-
-- Data Quality軽度低下
-- Edge Health弱化
-- DD悪化開始
-- Market Novelty上昇
-- Execution friction増加
 
 ## RISK_REDUCED
 
@@ -1037,23 +1098,11 @@ EMERGENCY
 
 重大Safety Event。
 
-候補:
-
-- Critical Exchange Failure
-- Position state unknown
-- Severe Data corruption
-- Global DD limit breach
-- Execution runaway
-
-Emergency ActionはRisk / Recovery Contractで定義する。
-
 ---
 
 # 10. Risk State Transition原則
 
 上方向のRisk許可回復は慎重に行う。
-
-例:
 
 ```text
 EMERGENCY
@@ -1064,22 +1113,7 @@ EMERGENCY
 → NORMAL
 ```
 
-一方、危険側への遷移は即時を許可する。
-
-```text
-NORMAL → EMERGENCY
-```
-
-もCritical Triggerなら許可。
-
-回復条件候補:
-
-- Root Cause resolved
-- Data Health restored
-- Execution reconciliation complete
-- Cooldown elapsed
-- Manual / Policy approval
-- Edge health revalidated
+危険側への遷移はCritical Triggerなら即時を許可する。
 
 ---
 
@@ -1131,23 +1165,7 @@ Entry ThesisのInvalidation Conditionが成立。
 
 # 11. Position State Hysteresis
 
-短期Noiseで、
-
-```text
-HOLD ↔ WATCH ↔ HOLD ↔ WATCH
-```
-
-を高速反転させない。
-
-後続設計で次を設定可能にする。
-
-```text
-minimum_persistence_duration
-minimum_evidence_count
-minimum_change_magnitude
-cooldown
-multi_timeframe_confirmation
-```
+短期Noiseで状態を高速反転させない。
 
 ただしHard Safety EventはHysteresisを飛ばしてCritical側へ遷移可能。
 
@@ -1180,8 +1198,6 @@ STOPPED
 
 Dependency / Config / Storage / Adapter等を確認し起動中。
 
-Productionは必要DependencyがHealthyになる前に注文可能状態へ移行しない。
-
 ## RUNNING
 
 期待された機能が稼働中。
@@ -1193,14 +1209,6 @@ Processは存在するが主要処理を意図的に停止。
 ## DEGRADED
 
 一部機能低下はあるが限定稼働可能。
-
-例:
-
-```text
-Non-critical Source failure
-→ DEGRADED
-→ Quality / Confidence低下
-```
 
 ## ERROR
 
@@ -1256,15 +1264,6 @@ STOPPING
 → STOPPED
 ```
 
-禁止:
-
-```text
-STOPPED → RUNNING  # BOOTINGを飛ばさない
-ERROR → RUNNING    # Recovery / health checkを無視しない
-```
-
-Critical EmergencyではSafe Stopを優先できる。
-
 ---
 
 # STATE-HLT-001: System Health State
@@ -1287,22 +1286,7 @@ CRITICAL
 UNKNOWN
 ```
 
-## UNKNOWN
-
-Health判定Data自体が不足。
-
-UNKNOWNをHEALTHYへ自動変換しない。
-
 Runtime StateとHealth Stateは分離する。
-
-例:
-
-```text
-Runtime = RUNNING
-Health = DEGRADED
-```
-
-はあり得る。
 
 ---
 
@@ -1329,49 +1313,6 @@ CLOSED
 REOPENED
 ```
 
-## DETECTED
-
-障害検知。
-
-## CLASSIFYING
-
-Severity / Scope / Root Cause候補を評価。
-
-## CONTAINED
-
-影響拡大を止めた。
-
-例:
-
-- Source isolate
-- Execution pause
-- Queue stop
-- Circuit breaker
-
-## MITIGATING
-
-暫定対策中。
-
-## RECOVERING
-
-正常系へ復帰処理中。
-
-## RESOLVED
-
-直接障害は解消。
-
-## MONITORING
-
-再発確認期間。
-
-## CLOSED
-
-復旧確認・必要Knowledge化完了。
-
-## REOPENED
-
-再発または未解決が判明。
-
 ---
 
 # STATE-REC-001: Recovery Action State
@@ -1388,18 +1329,6 @@ ESCALATED
 ```
 
 Retry無限ループを防止する。
-
-後続Failure Contractで、
-
-```text
-max_retry
-backoff
-cooldown
-circuit_breaker
-manual_escalation
-```
-
-をVersion付きPolicyとして定義する。
 
 ---
 
@@ -1424,21 +1353,7 @@ RETIRED
 UNKNOWN
 ```
 
-## FALLBACK
-
-Primary Source不調時に代替Providerを利用中。
-
 Logical SourceとProviderを分離する。
-
-例:
-
-```text
-OPEN_INTEREST = ACTIVE
-Provider A = UNAVAILABLE
-Provider B = FALLBACK
-```
-
-Source Provider終了でMarket理解概念そのものを失わない。
 
 ---
 
@@ -1458,26 +1373,6 @@ INVALID
 UNKNOWN
 ```
 
-## HEALTHY
-
-通常利用可能。
-
-## DEGRADED
-
-一部問題あり。Confidence / Applicabilityへ制約を伝播。
-
-## UNRELIABLE
-
-重要判断へ利用するには信頼性不足。
-
-## INVALID
-
-破損・不整合等により利用不可。
-
-## UNKNOWN
-
-品質評価自体が十分できない。
-
 Qualityは単一Stateだけでなく、Missing / Freshness / Latency / Consistency等の元Dimensionを保持する。
 
 ---
@@ -1485,10 +1380,6 @@ Qualityは単一Stateだけでなく、Missing / Freshness / Latency / Consisten
 # I. STORAGE / BACKUP / MIGRATION
 
 # STATE-STO-001: Storage Lifecycle State
-
-対象:
-
-- Raw / Research / Operational Data Retention
 
 候補State:
 
@@ -1500,34 +1391,6 @@ ARCHIVED
 DELETION_PENDING
 DELETED
 ```
-
-## HOT
-
-高速参照対象。
-
-## WARM
-
-頻度は下がるが比較的高速に利用可能。
-
-## COLD
-
-低頻度参照・圧縮・低Cost保存。
-
-## ARCHIVED
-
-長期保存対象。
-
-## DELETION_PENDING
-
-Retention Policyで削除候補。削除前Validation / Legal / Knowledge Value確認を可能にする。
-
-## DELETED
-
-削除完了を示すMetadata状態。
-
-重要:
-
-Raw Dataの長期保存原則と有限Storageを、Compression / Tiering / Archiveで両立する。
 
 ---
 
@@ -1544,13 +1407,6 @@ VERIFIED
 FAILED
 EXPIRED
 ```
-
-重要:
-
-> Backupは `CREATED` だけでは成功扱いにしない。
-> Restore可能性を確認して `VERIFIED` を区別する。
-
-定期Restore TestはBackup Governanceで設計する。
 
 ---
 
@@ -1569,13 +1425,6 @@ FAILED
 ROLLED_BACK
 SUPERSEDED
 ```
-
-原則:
-
-- Migration前Versionを追跡可能にする
-- Old Schemaを即時破壊しない
-- Verification前に旧Dataを削除しない
-- Rollback Pathを用意する
 
 ---
 
@@ -1600,18 +1449,7 @@ PRODUCTION
 ROLLED_BACK
 ```
 
-重要:
-
-> Software Deployment StageとHypothesis / Edge Production Promotion Stageを混同しない。
-
-例えば、
-
-```text
-Code = PRODUCTION
-Hypothesis = DEMO_FORWARD
-```
-
-は成立する。
+Software Deployment StageとHypothesis / Edge Production Promotion Stageを混同しない。
 
 ---
 
@@ -1623,12 +1461,13 @@ Stateは誰でも自由に書き換えられるものではない。
 
 | State Machine | Primary Authority |
 |---|---|
-| Hypothesis | Causal Engine + Research / Approval |
+| Hypothesis Lifecycle | Causal Engine + Research / Approval |
+| Edge Lifecycle | Research / Approval |
 | Research Candidate | Research Orchestrator |
 | Research Plan Lifecycle | Research Orchestrator |
 | Research Plan Lock | Research Orchestrator / Validation Framework |
 | Research Trial | Experimental / Validation Framework |
-| Knowledge Aging | Knowledge Aging Governance |
+| Knowledge Aging / Health | Knowledge Aging Governance |
 | Production Promotion | Approval + Risk Governance |
 | Risk State | Risk Governance / Defense |
 | Position Thesis | Position Supervisor |
@@ -1642,25 +1481,7 @@ Stateは誰でも自由に書き換えられるものではない。
 | Migration | Version / Migration Governance |
 | Deployment | Deployment / Operations |
 
-原則:
-
-- Signal EngineがRisk Stateを勝手にNORMALへ戻さない
-- RuntimeがHypothesisをAPPROVEDへ変更しない
-- TelegramがState DBを直接書き換えない
-- AI ReviewがProduction Promotionを直接昇格しない
-- LoggerがState Authorityにならない
-
-FIX-010ではAuthorityを一人へ最終確定するのではなく、成功Transitionごとに:
-
-```yaml
-requested_by_role:
-authorized_by_role:
-applied_by_role:
-```
-
-をStateTransitionEventへ残せることを固定する。
-
-Authorityの最終一意性・Request / Recommend / Approve / Applyの責任分離はFIX-013で確定する。
+FIX-013でRequest / Recommend / Approve / Applyの最終責任分離を確定する。
 
 ---
 
@@ -1676,24 +1497,6 @@ Safety Stateでは次を基本とする。
 = 検証を要求する
 ```
 
-例:
-
-```text
-NORMAL → EMERGENCY
-```
-
-は即時可能。
-
-しかし、
-
-```text
-EMERGENCY → NORMAL
-```
-
-は原則一発復帰させない。
-
-どちらの成功TransitionもStateTransitionEventとして記録し、回復の方が慎重であることを履歴から確認できるようにする。
-
 ---
 
 # 15. Hard TriggerとSoft Trigger
@@ -1702,26 +1505,9 @@ EMERGENCY → NORMAL
 
 即時遷移可能な重大条件。
 
-候補:
-
-- Position state unknown
-- Exchange order runaway
-- Critical Data corruption
-- Hard Constraint violation
-- Emergency Risk Limit breach
-
 ## Soft Trigger
 
-Persistence /複数Evidence / Cooldown等を確認して遷移する条件。
-
-候補:
-
-- Edge Health徐々に悪化
-- Contradiction増加
-- Market Novelty増加
-- Data freshness軽度低下
-
-この区別により、過敏なState反転とSafety遅延の両方を防ぐ。
+Persistence / 複数Evidence / Cooldown等を確認して遷移する条件。
 
 StateTransitionEventにはHard / Soft判定の根拠となったTrigger / Reasonを参照可能にする。
 
@@ -1740,51 +1526,13 @@ recovery_confirmation_count:
 hard_trigger_override:
 ```
 
-対象候補:
-
-- Position Thesis State
-- Risk State
-- Health State
-- Edge Health
-- Data Quality
-
-Hysteresis Ruleを変更しても過去Transitionを新Ruleで再解釈せず、State Machine / Policy Versionから当時の条件を追跡できるようにする。
-
 ---
 
 # 17. Manual Override
 
 人間によるState Overrideは完全禁止しないが、必ずAudit可能にする。
 
-最低限:
-
-```yaml
-override_id:
-target_state_machine:
-from_state:
-to_state:
-requested_by:
-reason:
-requested_at:
-expires_at:
-confirmation_ref:
-```
-
-危険操作はConfirmationを要求できる。
-
-Manual Overrideによって元Evidence / Failureを消さない。
-
-Manual Overrideが実際にState変更へ成功した場合、そのStateTransitionEventには:
-
-```yaml
-manual_override_ref:
-authorization_ref:
-requested_by_actor:
-```
-
-を残し、自動遷移と人間Overrideを区別する。
-
-Override要求が拒否された場合は成功StateTransitionEventを生成しない。
+Manual Overrideが実際にState変更へ成功した場合、そのStateTransitionEventへ追跡情報を残す。
 
 ---
 
@@ -1792,19 +1540,7 @@ Override要求が拒否された場合は成功StateTransitionEventを生成し�
 
 一つのMarket Eventが複数State Transitionを起こすことがある。
 
-例:
-
-```text
-Liquidity Collapse Event
-├→ Data Quality = DEGRADED
-├→ Risk = RISK_REDUCED
-├→ Position Thesis = WATCH
-└→ Research Candidate = NEW
-```
-
 すべての成功Transitionに同じMarket Event ID / Trigger Refを関連付けることで、後から影響を追跡可能にする。
-
-ただし一つのMarketEventから複数StateTransitionEventが生成され得るため、MarketEventとStateTransitionEventを同一Objectにしない。
 
 ---
 
@@ -1812,72 +1548,19 @@ Liquidity Collapse Event
 
 State TransitionはBackward ProvenanceだけでなくForward Impactを追跡可能にする。
 
-例:
-
-```text
-Source = UNAVAILABLE
-↓
-Feature Quality = DEGRADED
-↓
-Hypothesis Applicability低下
-↓
-Trade Thesis影響
-↓
-Risk = RISK_REDUCED
-```
-
-各成功State Transitionに`trace_id / trigger_refs / previous_transition_event_ref`等を持たせ、後から順序と影響を追えるようにする。
-
-将来のDependency / Impact Contractで正式化する。
-
 ---
 
 # 20. StateとEvidence Channel
 
 Hypothesis / Edge State変更時に、Evidence Sourceを失わない。
 
-例:
-
-```text
-Historical = PASS
-OOS = PASS
-Demo Forward = FAIL
-Live = insufficient
-```
-
-を、単純に `WEAK` 一文字だけへ圧縮しない。
-
 StateはSummaryであり、元のEvidencePackage / AssessmentProfileを参照可能にする。
-
-StateTransitionEventの`trigger_refs`から、State変更を起こしたEvidencePackage / ResearchResult / ProductionEvidence等へ遡れることを目標とする。
 
 ---
 
 # 21. State変更とKnowledge化
 
 重要なState Transition自体をResearch資産にできる。
-
-例:
-
-```text
-NORMAL_LIVE → PAUSED
-原因: Demo/Live Divergence
-```
-
-```text
-RUNNING → ERROR → RECOVERY → RUNNING
-原因: Source timeout
-```
-
-これらのStateTransitionEventを後から、
-
-- Failure
-- Negative Knowledge
-- Recovery Knowledge
-- Constraint
-- Research Candidate
-
-へ変換可能にする。
 
 State履歴そのものを消さず、Knowledgeは履歴を参照する。
 
@@ -1899,9 +1582,7 @@ State履歴そのものを消さず、Knowledgeは履歴を参照する。
 9. 長期維持価値があるか？
 ```
 
-満たさない場合、新Stateを増やさない。
-
-State History Objectも同様に個別Objectを増やさず、原則共通`StateTransitionEvent`を利用する。
+FIX-012以降、新State追加時は別軸の責任を侵食していないかも確認する。
 
 ---
 
@@ -1909,18 +1590,7 @@ State History Objectも同様に個別Objectを増やさず、原則共通`State
 
 State名・意味・遷移を変更する場合、`DESIGN_CHANGE_RULES.md` に従う。
 
-特にMajor変更候補:
-
-- State削除
-- State意味変更
-- Lifecycle順序変更
-- Production Promotion飛び越し許可
-- Risk State意味変更
-- Runtime State意味変更
-
-これらは既存DB / Python Enum / Test / Monitoring / Telegram / Analytics / StateTransitionEvent解釈へ影響するため、Impact Analysisを必須候補とする。
-
-State Machine Version変更時も過去StateTransitionEventを新Versionの意味で無言に書き換えない。
+FIX-012の旧State MigrationはBackup ManifestとMigration Mappingを保持し、過去履歴を新Stateへ無言で書き換えない。
 
 ---
 
@@ -1928,91 +1598,43 @@ State Machine Version変更時も過去StateTransitionEventを新Versionの意�
 
 後の `PYTHON_ARCHITECTURE.md` では、本辞書を基準にEnum / State Machineへ落とす。
 
-例候補:
+重要:
 
-```python
-class RuntimeState(str, Enum):
-    BOOTING = "BOOTING"
-    RUNNING = "RUNNING"
-    PAUSED = "PAUSED"
-    DEGRADED = "DEGRADED"
-    ERROR = "ERROR"
-    RECOVERY = "RECOVERY"
-    STOPPING = "STOPPING"
-    STOPPED = "STOPPED"
+```text
+hypothesis.status == ACTIVE
 ```
 
-ただし本書ではPython class名・LibraryをCanonical固定しない。
+のような単一Mystery StatusによるProduction判定を新規実装しない。
 
-重要なのは論理State定義であり、実装言語は将来変更可能にする。
+Production判定は概念上:
 
-StateTransitionEventも実装時にPydantic / Dataclass / ORM / Event Schema等へ落とせるが、Semantic定義は`OBJECT_DICTIONARY.md`へ従う。
+```text
+Lifecycle
+AND Knowledge Aging / Health
+AND Production Promotion Stage
+AND Applicability
+AND Constraint
+AND Risk State
+```
+
+を別々に確認する。
 
 ---
 
 # 25. Database実装への変換方針
 
-後の `DATABASE_SCHEMA.md` では、Current StateとTransition Historyを分離して検討する。
+Current StateとTransition Historyを分離する。
 
-Current Projection候補:
-
-```text
-state_machine_id
-state_machine_type
-current_state
-previous_state
-state_machine_version
-state_changed_at
-latest_transition_event_ref
-```
-
-Transition Historyは正式Semantic Object:
+FIX-012では同一Knowledgeについて複数State Machineを別Projection /別Historyとして保持可能にする。
 
 ```text
-OBJ-STATE-001: StateTransitionEvent
+HYPOTHESIS_LIFECYCLE
+EDGE_LIFECYCLE
+KNOWLEDGE_AGING
+PRODUCTION_PROMOTION
 ```
 
-を保存する。
-
-論理Fields:
-
-```yaml
-state_transition_event_id:
-target_object_ref:
-state_machine_id:
-state_machine_type:
-state_machine_version:
-from_state:
-to_state:
-expected_previous_state:
-transition_sequence:
-trigger_refs: []
-reason_codes: []
-requested_by_role:
-authorized_by_role:
-applied_by_role:
-requested_by_actor:
-transitioned_at:
-effective_at:
-created_at:
-manual_override_ref:
-authorization_ref:
-previous_transition_event_ref:
-trace_id:
-```
-
-DB実装時に最低限検討すること:
-
-```text
-- target / state_machine単位のtransition_sequence uniqueness
-- expected_previous_stateによるCAS / optimistic concurrency
-- Transition Apply / Event Insert / Current Projection Updateのatomicity
-- latest_transition_event_ref整合性
-- ReplayによるProjection再構築
-- Immutable retention
-- State Machine Version migration
-- AuditEventとの参照関係
-```
+を一つの`status` Columnへ圧縮しない。
 
 正式Table名・Index・Transaction方式は `DATABASE_SCHEMA.md` で確定する。
 
@@ -2020,48 +1642,36 @@ DB実装時に最低限検討すること:
 
 # 26. Monitoring / Telegram表示原則
 
-Stateは人間が現在状況をすぐ理解できるよう表示可能にする。
+人間向け表示でも軸を潰さない。
 
 例:
 
 ```text
-BTC Instance
-Runtime: RUNNING
-Health: DEGRADED
-Risk: RISK_REDUCED
-Production Stage: LIMITED_LIVE
-Position Thesis: WATCH
+Hypothesis: APPROVED
+Knowledge: AGING
+Production: LIMITED_LIVE
+Risk: CAUTION
 ```
 
-異なるState Machineを一つの `SYSTEM_STATUS = BAD` へ潰さない。
-
-必要時にはCurrent Stateだけでなく、直近`StateTransitionEvent`の変更時刻・Reason Codeを表示可能にする。
+これを単一の`STATUS = ACTIVE`等へ変換しない。
 
 ---
 
 # 27. Long-Term Governance
 
-何十年運用ではState体系そのものも変化する。
+State Machine Versionを残し、FIX-012以前の旧State履歴も当時のVersionで解釈可能にする。
 
-そのため:
-
-- State Machine Versionを残す
-- StateTransitionEventへ当時のState Machine Versionを残す
-- 廃止Stateを即削除しない
-- Old State → New State Migration Mapを持てるようにする
-- 過去Trade / Trialを当時Stateの意味で再現可能にする
-- 新VersionのState意味で過去履歴を自動書き換えない
-- Current Projectionが壊れてもTransition Historyから再構築可能な設計を維持する
-
-例:
+旧:
 
 ```text
-Runtime State Machine v1
-↓
-Runtime State Machine v2
+Hypothesis ACTIVE / AGING / SUSPENDED
+Edge ACTIVE / DEGRADED / SUSPENDED
+Knowledge SUSPENDED
 ```
 
-になっても、2030年のRuntime Eventをv1定義で解釈可能にする。
+を物理削除・履歴改竄しない。
+
+新規生成ではFIX-012後の責任分離されたStateを利用する。
 
 ---
 
@@ -2074,21 +1684,14 @@ StateまたはState Machineを正式化するには最低限:
 □ 対象Object / Instance
 □ State一覧
 □ 各Stateの意味
+□ 他State Machineとの責任境界
 □ Primary Authority
-□ 入口条件
-□ 出口条件
 □ 許可遷移
 □ 禁止遷移
 □ Recovery / Reopen条件
-□ Hard / Soft Trigger
-□ Hysteresis要否
 □ StateTransitionEvent保存
-□ transition_sequence / Ordering rule
-□ Trace / Trigger Reference
 □ Version Rule
-□ Manual Override trace
-□ Monitoring表示
-□ Long-Term Migration方針
+□ Migration Rule
 ```
 
 を確認する。
@@ -2097,79 +1700,60 @@ StateまたはState Machineを正式化するには最低限:
 
 # 29. 現段階で未確定として残す項目
 
-以下は本State Dictionaryだけで固定せず、後続設計で数値・詳細Ruleを決める。
+以下は後続設計で決める。
 
 ```text
 Risk Stateの具体的DD閾値
 MICRO_LIVE / LIMITED_LIVEの資金割合
-Research Early Stopの具体的Sample数
 Knowledge Agingの具体的期限
-Health Stateの数値閾値
-Position Supervisor Hysteresisの具体時間
-Retry回数 / Backoff時間
-Storage Retention期間
-Backup頻度
-StateTransitionEventの物理Table / Index / Partition
+Knowledge DEGRADED時のProduction Gate強度
+AGING / STALE時のProduction縮小規則
+Production Promotion再開条件
 State Transition atomic write方式
 Authority Matrixの最終一意化
 ```
 
-理由:
-
-これらはState名ではなくPolicy / Threshold / Contract / Storage / Authorityの問題であり、Research・Risk・Operations・Data Contract・DB設計でVersion付きにした方がよい。
+これらはState名ではなくPolicy / Threshold / Contract / Authorityの問題である。
 
 ---
 
 # 30. 現段階のState体系まとめ
 
 ```text
-Hypothesis:
-DRAFT → RESEARCHING → SUPPORTED → APPROVED → ACTIVE
-                    ↘ WEAK / CONFLICTED
-ACTIVE → AGING / SUSPENDED / RETIRED → REOPENED → RESEARCHING
-
-Research Candidate:
-NEW → SCREENING → QUEUED → RUNNING → COMPLETED
-                    ├→ PAUSED
-                    ├→ STOPPED
-                    ├→ MERGED
-                    ├→ REJECTED
-                    └→ EXPIRED
-
-Research Plan Lifecycle:
-DRAFT → READY → ACTIVE → COMPLETED
-       └──────────────→ SUPERSEDED / CANCELLED
-
-Research Plan Lock:
-EDITABLE → PRE_REGISTERED → FROZEN
+Hypothesis Lifecycle:
+DRAFT → RESEARCHING → SUPPORTED → APPROVED → RETIRED
+                    ├→ WEAK
+                    └→ CONFLICTED
+WEAK / CONFLICTED / RETIRED → REOPENED → RESEARCHING
 
 Edge Lifecycle:
-CANDIDATE → VALIDATING → SUPPORTED → APPROVED → ACTIVE
-ACTIVE → DEGRADED / SUSPENDED / RETIRED → REOPENED
+CANDIDATE → VALIDATING → SUPPORTED → APPROVED → RETIRED
+RETIRED → REOPENED → VALIDATING
+
+Knowledge Aging / Health:
+FRESH → CURRENT → AGING → STALE
+                    └────→ DEGRADED
+                         → ARCHIVED
 
 Production Promotion:
 RESEARCH_ONLY → SHADOW → DEMO_FORWARD → MICRO_LIVE → LIMITED_LIVE → NORMAL_LIVE
-                                                                  ↓
-                                                                PAUSED
+      └──────────────────────────────────────────────────────────────→ PAUSED
 
 Risk:
 NORMAL → CAUTION → RISK_REDUCED → MICRO_ONLY → NO_NEW_ENTRY → EMERGENCY
+
+Research Plan Lifecycle:
+DRAFT → READY → ACTIVE → COMPLETED
+
+Research Plan Lock:
+EDITABLE → PRE_REGISTERED → FROZEN
 
 Position Thesis:
 HOLD → WATCH → CAUTION → THESIS_WEAKENING → THESIS_INVALIDATED
 
 Runtime:
-STOPPED → BOOTING → RUNNING
-                    ├→ PAUSED
-                    ├→ DEGRADED
-                    └→ ERROR → RECOVERY
-RUNNING / DEGRADED → STOPPING → STOPPED
-
-Incident:
-DETECTED → CLASSIFYING → CONTAINED → MITIGATING → RECOVERING → RESOLVED → MONITORING → CLOSED
+STOPPED → BOOTING → RUNNING / DEGRADED / ERROR → RECOVERY / STOPPING → STOPPED
 ```
-
-すべての成功Transitionは共通`StateTransitionEvent`として履歴化可能にする。
 
 ---
 
@@ -2177,44 +1761,35 @@ DETECTED → CLASSIFYING → CONTAINED → MITIGATING → RECOVERING → RESOLVE
 
 市場理解OSではStateを「便利な文字列」として扱わない。
 
-Stateは、
-
-> **長期間の研究・Production・Risk・Runtimeが、今どの段階にあり、なぜそこへ移動したかを説明するための正式な状態体系**
-
-として扱う。
-
-FIX-010ではさらに:
+FIX-012以降の最重要原則:
 
 ```text
-Current State
-= 現在値の高速Projection
-
-StateTransitionEvent
-= 実際に成功・適用されたState変更のImmutable Historical Fact
+Research maturity
+≠ Knowledge freshness / health
+≠ Production permission
+≠ Current OS risk permission
 ```
 
-を正式に分離する。
-
-そして、
+つまり、
 
 ```text
-State
-+ Transition Rule
-+ Trigger
-+ StateTransitionEvent History
-+ Version
-+ Authority Provenance
+Hypothesis / Edge Lifecycle
++ Knowledge Aging / Health
++ Production Promotion Stage
++ Risk State
 ```
 
-をセットで管理する。
+を独立して管理する。
 
-これにより市場理解OSは、数年後・数十年後でも、
+一つの`ACTIVE / SUSPENDED / DEGRADED`等の曖昧なstatusへ戻さない。
+
+これにより市場理解OSは、
 
 ```text
-「なぜこのHypothesisを止めた？」
-「なぜこの日にRiskを下げた？」
-「なぜこのProcessはDEGRADEDになった？」
-「なぜこのEdgeはProductionから外れた？」
+「研究としては承認済みだが、今は古い」
+「知識は健全だが、まだDemo Forwardまで」
+「KnowledgeはLive利用可能だが、OS全体Riskで新規Entry禁止」
+「Edgeは過去Approvalを維持するが、最近Liveで劣化したためProduction停止」
 ```
 
-を再現可能にする。
+をそれぞれ正確に表現できる。
