@@ -73,6 +73,7 @@ ApplicableHypothesisSet
 TradeThesis
 EntryThesis
 ProductionEvidence
+StateTransitionEvent
 OrderIntent
 TradeResult
 ```
@@ -132,6 +133,7 @@ COUNTERFACTUAL
 
 ```text
 A. COMMON / CONTROL OBJECTS
+A-3. STATE / TRANSITION OBJECTS
 B. OBSERVATION / DATA OBJECTS
 C. MEASUREMENT / FEATURE OBJECTS
 D. MARKET UNDERSTANDING OBJECTS
@@ -200,6 +202,9 @@ Trade Thesis ID
 
 Hypothesis ID
 = 研究仮説を識別
+
+State Transition Event ID
+= 実際に適用された一つのState遷移事実を識別
 ```
 
 同じMarket Eventを複数Hypothesisで研究しても、Unique Market Event数を水増ししない。
@@ -226,6 +231,7 @@ OrderIntent
 ExecutionRecord
 TradeResult
 ProductionEvidence
+StateTransitionEvent
 ```
 
 修正が必要な場合は元Objectを上書きせず、新Version / Correction Object / Superseded関係を使う。
@@ -486,6 +492,148 @@ policy_version:
 ## Invariants
 
 Signalが上限を書き換えない。
+
+---
+
+# A-3. STATE / TRANSITION OBJECTS
+
+# OBJ-STATE-001: StateTransitionEvent
+
+## Meaning
+
+State Machine上で実際に成功・適用された一回のState遷移を、誰が・なぜ・何を根拠に・どのVersionのState Machineで変更したかまで含めて保存するImmutable Historical Event Object。
+
+`StateTransitionEvent` はCurrent Stateそのものではなく、Stateが変化したという履歴上の事実を表す。
+
+## Generator
+
+当該State Machineで正式にTransitionを適用したAuthorized State-owning Role / Authority。
+
+FIX-010では最終Authorityの割当そのものは確定せず、`requested_by_role / authorized_by_role / applied_by_role`を保存可能にする。最終Authority MatrixはFIX-013 /後続Contractで固定する。
+
+## Custodian
+
+Logger / Audit Storage。
+
+LoggerはState変更を決定せず、生成済みStateTransitionEventを改変せず保存する。
+
+## Consumers
+
+- Current State Projection / State Machine
+- Governance / Audit
+- Monitoring
+- Research / Post-Trade
+- Recovery / Migration
+- Human Interface
+
+## Main Fields
+
+```yaml
+state_transition_event_id:
+target_object_ref:
+
+state_machine_id:
+state_machine_type:
+state_machine_version:
+
+from_state:
+to_state:
+expected_previous_state:
+transition_sequence:
+
+trigger_refs: []
+reason_codes: []
+
+requested_by_role:
+authorized_by_role:
+applied_by_role:
+requested_by_actor:
+
+transitioned_at:
+effective_at:
+created_at:
+
+manual_override_ref:
+authorization_ref:
+previous_transition_event_ref:
+
+trace_id:
+```
+
+## FIX-010 Canonical Boundary
+
+```text
+Trigger / Request
+↓
+Transition Rule Check
+↓
+Authority Check
+↓
+Current State / expected_previous_state Check
+↓
+Transition Apply
+↓
+StateTransitionEvent
+↓
+Current State Projection Update
+↓
+Logger / Audit / Research / Monitoring
+```
+
+## Current State Relationship
+
+```text
+Current State
+= 現在値を高速参照するためのProjection / Cache
+
+StateTransitionEvent
+= 実際に適用された過去遷移のImmutable Historical Fact
+```
+
+Transition Historyを`transition_sequence`順にReplayすることで、対象State MachineのCurrent Stateを再構築可能な設計を目標とする。
+
+## Invariants
+
+- 実際に成功・適用されたTransitionだけを`StateTransitionEvent`として生成する
+- Authority Check / Rule Check等で拒否されたTransition Attemptを成功Eventとして記録しない
+- `from_state` は適用直前のCurrent Stateと整合しなければならない
+- `expected_previous_state` を用いて古いStateを前提としたConcurrent / Stale Writeを検出可能にする
+- `to_state` は当該`state_machine_type / state_machine_version`で合法なStateでなければならない
+- `transition_sequence` は同一State Machine / Target内で順序を一意に追跡可能にする
+- `state_machine_version`を保持し、将来State定義が変化しても過去遷移を当時の意味で再現可能にする
+- `trigger_refs` と `reason_codes` を分け、何が起点だったかと、なぜ遷移したかを追跡可能にする
+- Authority provenanceとして`requested_by_role / authorized_by_role / applied_by_role`を必要に応じて保持する
+- Manual Overrideを通常自動遷移に偽装せず、`manual_override_ref / authorization_ref`から追跡可能にする
+- 生成後に過去Eventを削除・上書きしない
+- 判断訂正が必要な場合は元Eventを書き換えず、新しい合法TransitionまたはCorrection / Superseded関係を使う
+- Current Stateの高速Projectionが破損しても、正当なTransition Historyから再構築可能な設計を維持する
+
+## Failed / Rejected Transition
+
+Transition Requestが拒否・失敗した場合、それは`StateTransitionEvent`ではない。
+
+```text
+Rejected / Failed Transition Attempt
+→ AuditEvent / Diagnostics / ApprovalDecision候補
+```
+
+必要性が将来確認された場合のみ、Object追加Gateを通して`StateTransitionAttempt`等を検討する。FIX-010では新Objectを増やさない。
+
+## StateTransitionEvent vs AuditEvent
+
+```text
+StateTransitionEvent
+= Stateが実際に変わった事実
+
+AuditEvent
+= 誰が何を操作・承認・変更要求したかという監査記録
+```
+
+同じState変更に両方が存在してよいが、同一Objectへ統合しない。
+
+## Long-Term Notes
+
+Hypothesis / Edge / Research / Risk / Runtime等ごとに個別の`HypothesisStateHistory` / `RiskStateHistory` / `RuntimeStateHistory` Objectを乱立させず、共通`StateTransitionEvent`を`state_machine_type`で区別する。
 
 ---
 
@@ -3199,6 +3347,8 @@ authorization_ref:
 
 重要変更を「誰が・なぜ」行ったか追跡可能にする。
 
+`AuditEvent` はStateが実際に変更された事実そのものではない。成功State遷移の履歴は`StateTransitionEvent`を正本とする。
+
 ---
 
 # 7. Evidence Source Channel共通定義
@@ -3235,7 +3385,7 @@ ProductionEvidenceは必ず`LIVE` Channelの出所を保持する。
 
 # 8. SnapshotとCurrent Stateの区別
 
-同じ概念でも、現在値と過去Snapshotを区別する。
+同じ概念でも、現在値と過去Snapshot /履歴を区別する。
 
 例:
 
@@ -3248,14 +3398,19 @@ MarketDNA Snapshot
 ```
 
 ```text
-Current Hypothesis status
-= 現時点のKnowledge状態
+Current Hypothesis State
+= 現時点の高速参照用Projection
+
+StateTransitionEvent
+= Stateが実際にどう変わったかを保存するImmutable履歴
 
 EntryThesis
 = 実際にOrderIntentを作る直前に固定したTradeThesis / Hypothesis Set / Market / Risk / VersionのSnapshot
 ```
 
 ApplicableHypothesisSet / TradeThesis / EntryThesisはそれぞれ生成時点の情報を固定し、後から現在Knowledgeが変わっても過去Production判断を無言で書き換えない。
+
+StateについてもCurrent Stateだけを上書きしてTransition Historyを失わない。
 
 ---
 
@@ -3275,6 +3430,8 @@ OrderIntent
 → feature_id / market_event_id
 → raw_data_id
 ```
+
+State MachineではCurrent Projectionから`latest_transition_event_ref`等を参照可能にし、StateTransitionEvent側は`target_object_ref / previous_transition_event_ref / trigger_refs`から履歴を追跡できるようにする。
 
 ただし、EntryThesis等の監査・再現に重要なSnapshotでは、必要最小限のValueを同時固定してよい。
 
@@ -3322,6 +3479,20 @@ SourceMetadata
 
 ProductionEvidence自体も`ExecutionRecord + EntryThesis + Live Context`まで逆引き可能にする。
 
+Stateについては:
+
+```text
+Current State
+↓
+latest StateTransitionEvent
+↓
+previous StateTransitionEvent
+↓
+Trigger / Evidence / Decision / Error / Authority provenance
+```
+
+を追跡可能にする。
+
 ---
 
 # 11. Forward Impact Chain
@@ -3350,6 +3521,8 @@ Affected Order / Active Position
 
 Entry後はEntryThesisを書き換えず、影響はCurrent State / Supervisor / Defense / Incidentで扱う。
 
+重要なCurrent State変更はStateTransitionEventに残し、後からForward Impactの因果順序を追跡可能にする。
+
 ---
 
 # 12. Objectを勝手に統合しない組み合わせ
@@ -3376,6 +3549,8 @@ EntryThesis ≠ OrderIntent
 OrderIntent ≠ ExecutionRecord
 ExecutionRecord ≠ ProductionEvidence
 ProductionEvidence ≠ Post-Trade Analysis Result
+Current State ≠ StateTransitionEvent
+StateTransitionEvent ≠ AuditEvent
 PositionThesisState ≠ ExitDecision
 TradeResult ≠ TradeThesisEvaluation
 TradeResult ≠ HypothesisAttribution
@@ -3399,6 +3574,14 @@ Generator
 ≠ Analyzer
 ```
 
+FIX-010では次を固定する。
+
+```text
+Current State
+≠ StateTransitionEvent
+≠ AuditEvent
+```
+
 ---
 
 # 13. ObjectをTop-Level Layerへ昇格させない原則
@@ -3411,6 +3594,7 @@ ApplicableHypothesisSet
 TradeThesis
 EntryThesis
 ProductionEvidence
+StateTransitionEvent
 EvidencePackage
 FailureBoundary
 Constraint
@@ -3423,6 +3607,8 @@ Role Dictionaryに独立責任主体が定義されている場合のみRole / M
 ApplicableHypothesisSetとTradeThesisはFIX-008で`Production Thesis Builder`が生成するが、両Objectを別々のTop-Level Layerへ昇格させない。
 
 EntryThesis / ProductionEvidenceの生成処理はFIX-009でExecution Domain内部Submoduleへ割り当てるが、Object自体を新Top-Level Layerへ昇格させない。
+
+StateTransitionEventはFIX-010でOS横断Objectとして正式化するが、`State Transition Layer`のような新Top-Level Layerは作らない。
 
 ---
 
@@ -3442,6 +3628,8 @@ EntryThesis / ProductionEvidenceの生成処理はFIX-009でExecution Domain内�
 ```
 
 独立ID / Lifecycle / Version / Ownerが不要なら、新Objectを増やさない。
+
+FIX-010のStateTransitionEventは、異なるState Machineを横断して独立ID・時系列・Version・Authority provenance・Replay価値を持つため、独立Persistent Objectとして正式化する。
 
 ---
 
@@ -3473,7 +3661,9 @@ Stateの正式語彙・遷移は後続の:
 
 をSingle Source of Truth候補とする。
 
-本書に書かれているState一覧は現時点の候補であり、STATE_DICTIONARY作成時に重複・矛盾を整理する。
+FIX-010以降、成功したState変更履歴の共通Semantic Objectは`OBJ-STATE-001: StateTransitionEvent`を使用する。
+
+各State Machine専用の重複History Objectを無秩序に増やさない。
 
 ---
 
@@ -3515,6 +3705,22 @@ Logger Custody Contract
 Post-Trade Read-only Consumer Contract
 ```
 
+FIX-010で決めた次もData / Processing Contractで固定する。
+
+```text
+StateTransitionEvent required / nullable fields
+state_machine_type namespace / enum
+transition_sequence uniqueness scope
+expected_previous_state compare-and-set rule
+successful applyとEvent persistのatomicity
+Current Projection update ordering
+latest_transition_event_ref
+Replay / rebuild rule
+StateTransitionEvent retention
+AuditEventとの関連Cardinality
+Manual Override authorization reference
+```
+
 ---
 
 # 18. ObjectとDATABASE_SCHEMAの関係
@@ -3534,6 +3740,8 @@ evidence_links table
 ```
 
 のように分割される可能性がある。
+
+StateTransitionEventもSemantic Objectとしては1つだが、DBではCurrent Projection TableとTransition History Tableへ分かれる可能性がある。
 
 DB Schemaは後からStorage効率・Query・Migrationを考えて決める。
 
@@ -3594,7 +3802,7 @@ Important Hypothesis / Failure / Trade / Knowledge
 → IMMUTABLE_LONG_TERM候補
 ```
 
-EntryThesis / ProductionEvidence / ExecutionRecord / TradeResultは監査・研究価値が高いため長期Immutable保存候補。
+EntryThesis / ProductionEvidence / ExecutionRecord / TradeResult / StateTransitionEventは監査・研究・再構築価値が高いため長期Immutable保存候補。
 
 具体的保存期間は `STORAGE.md` / Long-Term Governanceで決める。
 
@@ -3668,6 +3876,12 @@ QualityProfile
 Diagnostics
 RuntimeCommand
 GlobalRiskLimit
+```
+
+## State / Transition
+
+```text
+StateTransitionEvent
 ```
 
 ## Observation / Data
@@ -3796,6 +4010,10 @@ Failure Museum
 Knowledge Graph
 THESIS_NOT_BUILDABLE
 ENTRY_SNAPSHOT_NOT_BUILDABLE
+StateTransitionAttempt
+HypothesisStateHistory
+RiskStateHistory
+RuntimeStateHistory
 ```
 
 理由:
@@ -3803,6 +4021,8 @@ ENTRY_SNAPSHOT_NOT_BUILDABLE
 - Case Library / Market Memory / Failure Museum / Knowledge Graph = Knowledge DomainのView
 - `THESIS_NOT_BUILDABLE` = FIX-008時点ではTradeThesisとは別Objectを新設せず、BuilderのDiagnostics / Processing Contract上の非成立結果として扱う
 - `ENTRY_SNAPSHOT_NOT_BUILDABLE` = FIX-009時点ではEntryThesisとは別Objectを新設せず、Entry Snapshot BuilderのDiagnostics / Processing Contract上のHard Gate非成立結果として扱う
+- `StateTransitionAttempt` = FIX-010では拒否・失敗Attempt専用Objectを増やさずAuditEvent / Diagnostics等で扱う
+- 個別State History名 = 共通`StateTransitionEvent`を`state_machine_type`で利用し、履歴Objectを乱立させない
 
 また:
 
@@ -3832,13 +4052,14 @@ COUNTERFACTUAL
 4. **MarketEventのCanonical生成責任はFIX-007でEvent Detection Processorへ確定済み。Event Field型・Detection Rule参照型・Dedup/Cardinality・Detector HealthのContractは `DATA_CONTRACT.md` / Data Flowで固定する**
 5. **ApplicableHypothesisSet / TradeThesisのCanonical生成責任はFIX-008でProduction Thesis Builderへ確定済み。Builder Input Contract、Selection Cardinality、Builder Version型、`THESIS_NOT_BUILDABLE`表現、Set→Thesis→Signal受け渡しは `DATA_CONTRACT.md` / Processing / Trade Thesis Contractで固定する**
 6. **EntryThesis / ProductionEvidence生成責任はFIX-009で確定済み。Entry Snapshot hard gate、OrderIntent必須参照、時系列制約、Live Evidence completeness、ExecutionRecordとのCardinality、Logger Custody / Post-Trade read-only境界は `DATA_CONTRACT.md` / Processing Contractで固定する**
-7. Soft / Hard ContradictionのProduction Gate → Production Contract
-8. Risk Stateの閾値 → Risk Design / Research
-9. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
-10. Object間Cardinality → `DATA_CONTRACT.md` / `DATABASE_SCHEMA.md`
-11. Retention期間 → Storage Governance
-12. Encryption / Secret分類 → Security Design
-13. Schema Migration実装 → Version / Migration Design
+7. **成功State変更履歴はFIX-010で`StateTransitionEvent`へ正式化済み。Authority最終割当、Atomic Write、Sequence uniqueness、CAS、Replay、Retention、AuditEvent関連は `AUTHORITY MATRIX` / `DATA_CONTRACT.md` / Processing / DB Schemaで固定する**
+8. Soft / Hard ContradictionのProduction Gate → Production Contract
+9. Risk Stateの閾値 → Risk Design / Research
+10. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
+11. Object間Cardinality → `DATA_CONTRACT.md` / `DATABASE_SCHEMA.md`
+12. Retention期間 → Storage Governance
+13. Encryption / Secret分類 → Security Design
+14. Schema Migration実装 → Version / Migration Design
 
 ---
 
@@ -3862,4 +4083,8 @@ FIX-009ではさらに:
 
 > **GeneratorはObjectを作る。Custodianは改変せず保存する。Analyzerは後から意味を分析する。**
 
-何十年以上運用するため、Python・DB・Exchange・AI Providerが変わっても、Objectの意味・Version・Provenance・Research履歴・Trade判断履歴を失わない設計を優先する。
+FIX-010ではさらに:
+
+> **Current Stateは現在値のProjectionであり、StateTransitionEventは実際に適用された遷移のImmutable Historical Factである。**
+
+何十年以上運用するため、Python・DB・Exchange・AI Providerが変わっても、Objectの意味・Version・Provenance・Research履歴・Trade判断履歴・State Transition履歴を失わない設計を優先する。
