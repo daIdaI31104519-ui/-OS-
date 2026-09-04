@@ -2756,3 +2756,196 @@ Governance Function
 のどこへ置くべきか判定する。
 
 これにより市場理解OSが長期間の設計変更で肥大化・重複・責任衝突することを防ぐ。
+
+---
+
+# 17. FIX-013 State Authority Responsibility Model
+
+FIX-013ではState変更責任を次の4段階へ分離する。
+
+```text
+REQUEST
+↓
+RECOMMEND
+↓
+APPROVE
+↓
+APPLY
+↓
+StateTransitionEvent
+```
+
+## Responsibility Meaning
+
+```text
+REQUEST
+= State変更の必要性を正式要求する。Current Stateは変更しない。
+
+RECOMMEND
+= Evidence / Validation / Domain判断に基づき、どのTransitionが妥当か専門的に推奨する。Current Stateは変更しない。
+
+APPROVE
+= Governance / Policy上、そのTransitionを実施してよいと許可する。Current Stateへ直接書き込まない。
+
+APPLY
+= Current State / expected_previous_state / Transition Rule / Authority / Approvalを検証し、実際にCurrent State変更を適用する唯一の書込み責任。
+```
+
+正式原則:
+
+```text
+Request Authority
+≠ Recommend Authority
+≠ Approve Authority
+≠ Apply Authority
+```
+
+4責任を必ず別Process / 別人へ分けるという意味ではなく、**意味と権限を論理的に混同しない**ことを意味する。
+
+## Single-Writer Principle
+
+```text
+1 State Machine
+= 原則1 Apply Authority / single-writer responsibility
+```
+
+複数Roleが同じCurrent Stateへ無制限に直接書き込む構造は禁止する。
+
+各Domainでは必要に応じて次の内部責任名を利用できる。
+
+```text
+Hypothesis State Controller
+Edge State Controller
+Knowledge Lifecycle Controller
+Production Promotion Controller
+Risk State Controller
+Research Candidate Controller
+Research Plan Controller
+Research Plan Lock Controller
+Research Trial Controller
+Position Thesis Controller
+Runtime Controller
+Health Controller
+Incident Controller
+Source Lifecycle Controller
+Data Quality Controller
+Backup Controller
+Migration Controller
+Deployment Controller
+```
+
+これらは新しいTop-Level Layer / 巨大Roleを意味しない。**各既存Domain内のApply responsibility**を明示する論理名である。
+
+## Shared State Transition Engine
+
+実装では共通の`State Transition Engine`を利用可能とする。
+
+ただし:
+
+```text
+State Transition Engine
+= transition validation / CAS / atomic apply / event persist等の共通Mechanism
+
+State Authority
+= 誰がRequest / Recommend / Approve / Applyできるかという権限
+```
+
+であり、共通Engine自体を全State MachineのApproverにしない。
+
+## Safety Asymmetry
+
+Safety RestrictionとRisk Expansionを対称に扱わない。
+
+```text
+危険側 / Restrictive Transition
+= 明示されたEmergency AuthorityによるFast Pathを許可可能
+
+安全側へのRecovery / Permission Expansion
+= Strict Approval / Revalidationを要求する
+```
+
+例:
+
+```text
+Risk NORMAL → EMERGENCY
+Production NORMAL_LIVE → PAUSED
+Runtime RUNNING → PAUSED
+```
+
+はHard Trigger時にRestrictive Fast Pathを許可できる。
+
+一方:
+
+```text
+Risk EMERGENCY → NORMAL
+Production PAUSED → NORMAL_LIVE
+```
+
+をRestrictive Authorityが単独で自動復帰させない。
+
+## Human / Telegram Boundary
+
+Human / TelegramはState DBを直接書き換えない。
+
+```text
+Human / Telegram
+→ RuntimeCommand / Manual Override Request
+→ Authentication / Authorization
+→ State Authority Flow
+→ APPLY
+→ StateTransitionEvent
+```
+
+`/stop` / `/emergency` / `/no-entry`等のSafety Restrictionは、Policyで許可されたEmergency Fast Pathへ接続可能。
+
+`/risk-normal` / `/normal-live`等のRisk Expansion / Permission ExpansionはStrict Approvalを要求する。
+
+## AI Boundary
+
+External AI Review / AI-generated analysisは原則:
+
+```text
+REQUEST / RECOMMEND
+```
+
+まで。
+
+AI単独で:
+
+```text
+APPROVE
+APPLY
+```
+
+しない。
+
+AIが新しいState変更理由や仮説を提案した場合、必要に応じてResearchCandidate / Recommendationへ送る。
+
+## Logger / Post-Trade Boundary
+
+```text
+Logger
+= StateTransitionEvent / AuditEventのCustodian
+
+Post-Trade Analysis
+= State変更材料を分析しREQUEST / RECOMMEND候補を出せるAnalyzer
+```
+
+Logger / Post-Trade Analysisは、別途明示されたState Authorityを持たない限りCurrent Stateへ直接書き込まない。
+
+## ApprovalDecision Boundary
+
+FIX-013では`APPROVE`責任を正式化するが、正式な`ApprovalDecision` Objectは新設しない。
+
+```text
+ApprovalDecision Object formalization
+→ FIX-015
+```
+
+FIX-013時点では`authorization_ref / recommendation_ref`等で後続Object化へ接続可能にする。
+
+## Authority Rule
+
+State Machine別のRequest / Recommend / Approve / Apply割当は`STATE_DICTIONARY.md`のFIX-013 Authority Matrixを正本候補とする。
+
+State変更に関わるRoleは、そのMatrixを超える権限を自Roleへ暗黙追加してはならない。
