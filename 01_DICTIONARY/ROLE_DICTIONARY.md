@@ -46,6 +46,7 @@
 Collector
 Market Intelligence
 Causal Engine
+Production Thesis Builder
 Signal Engine
 Position Supervisor
 Runtime
@@ -63,6 +64,7 @@ MarketEvent
 Evidence
 CausalHypothesis
 MarketDNA
+ApplicableHypothesisSet
 TradeThesis
 OrderIntent
 TradeResult
@@ -1153,6 +1155,230 @@ ResearchResultをProduction利用可能Knowledgeへ昇格させる前に、Valid
 
 # E. PRODUCTION / TRADING
 
+# ROLE-PRD-001: Production Thesis Builder
+
+## Category
+PRODUCTION / THESIS CONSTRUCTION
+
+## Purpose
+
+Approved / production-eligibleなHypothesis・Edgeを現在市場の条件へ照合し、`ApplicableHypothesisSet` と `TradeThesis` を一貫した責任主体として生成する。
+
+Builderが答える問い:
+
+> **今の市場で、どの承認済みHypothesis / Edgeが適用可能で、それらをどの役割・依存関係・反証条件のもとで一つのTrade Thesisとして構成できるか。**
+
+## Owns
+
+- `ApplicableHypothesisSet` のCanonical生成責任
+- `TradeThesis` のCanonical生成責任
+- Approved Poolから現在市場へのApplicability Selection
+- PRIMARY / SUPPORTING / CONDITIONAL / CONTRADICTING役割付与
+- Shared Evidence / Dependency / Redundancy / Common Causeの明示
+- Thesis Composition / Invalidation Conditionの構造化
+
+## Inputs
+
+- HypothesisPoolEntry / Approved Hypothesis / Approved Edge references
+- MarketContext
+- Current Confirmed MarketDNA
+- ApplicabilityProfile
+- Constraint
+- Evidence / Contradiction
+- HypothesisAssessmentProfile
+- KnowledgeLifecycleProfile
+- Production Promotion Stage
+- QualityProfile / Uncertainty
+- MarketCase references（必要時）
+
+## Outputs
+
+- ApplicableHypothesisSet
+- TradeThesis
+- Diagnostics
+- ResearchCandidate（適用不能・組合せ矛盾・Knowledge gap等を研究へ戻す場合）
+
+## Upstream
+
+- Knowledge Promotion / Approved Knowledge Pool
+- Market Intelligence
+- Market DNA
+- Knowledge Domain
+
+## Downstream
+
+- External AI Review（optional）
+- Signal Engine
+- Post-Trade Analysis / Research（評価用）
+
+## Internal Responsibility Split
+
+新しいTop-Level Roleを複数作らず、内部責任を次へ分ける。
+
+```text
+Production Thesis Builder
+├─ Applicability Selector
+├─ Dependency / Redundancy Checker
+├─ Contradiction Integrator
+└─ Thesis Composer
+```
+
+### Applicability Selector
+
+Approvedであることだけを理由に利用可能としない。
+
+```text
+Approved Knowledge
++
+Current MarketContext / MarketDNA
++
+ApplicabilityProfile
++
+Constraint
++
+Knowledge Aging
++
+Production Promotion Stage
++
+Quality / Uncertainty
+↓
+Applicable candidate
+```
+
+原則:
+
+```text
+Approved
+≠ Applicable
+≠ Trade-worthy
+```
+
+### Dependency / Redundancy Checker
+
+- 同じEvidenceを複数Hypothesisが共有していないか確認する
+- 依存Hypothesisを独立した票として数えない
+- 同一Common Cause由来のHypothesisを独立Evidenceとして水増ししない
+- 冗長Hypothesisを多数決へ利用しない
+
+### Contradiction Integrator
+
+- Contradicting Hypothesisを消さずSetへ保持する
+- Soft / Hard Contradictionを後続Contractで区別可能な形にする
+- Constraint違反を単なる減点として隠さない
+
+### Thesis Composer
+
+`ApplicableHypothesisSet` から、現在市場で検討可能な一つの論拠として `TradeThesis` を構成する。
+
+TradeThesisでは次を表現可能とする。
+
+```text
+expected_direction
+expected_effect
+expected_horizon
+primary / supporting / conditional / contradicting hypotheses
+main_risks
+invalidation_conditions
+quality
+uncertainty
+```
+
+ただし `BUY / SELL / NO_TRADE` の最終Decisionは生成しない。
+
+## Responsibilities
+
+- Production Poolから現在市場に本当に適用可能なKnowledgeだけを選ぶ
+- Hypothesis数ではなく役割・Evidence独立性・Dependency・Constraintを評価する
+- `PRIMARY / SUPPORTING / CONDITIONAL / CONTRADICTING` を明示する
+- `shared_evidence_map / dependency_map / redundancy_map / common_cause_map` を保持する
+- Current Confirmed MarketDNAとApplicability条件を照合する
+- Production Promotion Stage / `max_production_stage` を超えた利用を許可しない
+- Knowledge Aging / Staleness / Revalidation requirementを無視しない
+- TradeThesisのExpected Effect / Horizon / Invalidationを明示する
+- Thesis生成時点の入力Version / referencesを追跡可能にする
+
+## Prohibitions
+
+- 新しいCausal HypothesisをProduction内で作る
+- DRAFT / RESEARCHING / 未承認HypothesisをLive Thesisへ追加する
+- AIがその場で提案した未検証HypothesisをTradeThesisへ追加する
+- Hypothesis多数決でDirectionを決める
+- Shared Evidenceを重複加点する
+- Constraintを無視する
+- Production Promotion Stageを勝手に昇格させる
+- Risk Limitを変更する
+- `SignalDecision` を生成する
+- BUY / SELL / NO_TRADEを最終確定する
+- Thesisを作れない場合に不足情報を推測して捏造する
+
+## Failure Behavior
+
+有効なThesisを構成できない場合、無理にTradeThesisを生成しない。
+
+代表例:
+
+```text
+PRIMARY候補なし
+Approvedだが全候補がApplicability外
+Hard Constraint違反
+Critical Data Quality問題
+Knowledge Stale / Revalidation required
+重大なDependency / Shared Evidence問題
+Contradictionが解消不能
+```
+
+この状態は `SignalDecision.NO_TRADE` と区別する。
+
+```text
+THESIS_NOT_BUILDABLE
+= Signal Engineへ渡せる有効なTradeThesis自体が成立していない
+
+SignalDecision.NO_TRADE
+= 有効なTradeThesisは存在するが、Signal EngineがRiskを取らないと判断した
+```
+
+`THESIS_NOT_BUILDABLE` の正式な表現方法は後続Data / Processing Contractで固定する。
+
+## Research Feedback
+
+次のような状況をResearchCandidateへ戻せる。
+
+```text
+NO_APPLICABLE_HYPOTHESIS
+REPEATED_THESIS_NOT_BUILDABLE
+HYPOTHESIS_SET_COMPOSITION_CONFLICT
+SHARED_EVIDENCE_OVERLAP
+APPLICABILITY_GAP
+CONTRADICTION_DOMINANCE
+KNOWLEDGE_STALENESS_GAP
+```
+
+Builder自身がResearch結果を生成したりProduction Ruleを自動更新しない。
+
+## Boundary
+
+```text
+Research / Knowledge Promotion
+= Hypothesis / Edgeを研究・検証・承認する
+
+Production Thesis Builder
+= 承認済みKnowledgeを現在市場に照合しApplicableHypothesisSet / TradeThesisへ組み立てる
+
+Signal Engine
+= そのTradeThesisにRiskを取る合理性・期待値があるか判断する
+
+Pre-Trade Defense
+= Signalが存在しても今Riskを取って安全か判断する
+```
+
+## Long-Term Notes
+
+- BuilderはResearchとProductionの境界を壊さないことを最優先する
+- Selection Logic / Composition LogicはVersion管理し、過去TradeでどのBuilder Versionを使ったか再現可能にする
+- Hypothesis SelectionとThesis Compositionを別Top-Level Layerへ分裂させず、必要な限り内部Submoduleとして管理する
+
+---
+
 # ROLE-AI-001: External AI Review
 
 ## Category
@@ -1201,7 +1427,7 @@ PRODUCTION
 
 ## Purpose
 
-現在のTradeThesisにRiskを取る合理性・期待値があるか判断する。
+Production Thesis Builderが生成した現在のTradeThesisに、Riskを取る合理性・期待値があるか判断する。
 
 ## Inputs
 
@@ -1224,12 +1450,15 @@ PRODUCTION
 
 - Expected Value中心の取引候補判断
 - Causal / Empirical Edge双方を利用可能にする
+- `BUY / SELL / NO_TRADE` のDecision責任を持つ
 
 ## Prohibitions
 
+- ApplicableHypothesisSet / TradeThesisのCanonical生成責任を吸収する
 - Defense責任を吸収する
 - AIReviewResultだけで決定
 - 全情報を意味不明な一つの総合Scoreへ潰す
+- 未承認Hypothesisをその場でThesisへ追加する
 
 ---
 
@@ -1545,7 +1774,7 @@ Formula issue → Formula Research
 Feature issue → Feature Research
 Market interpretation issue → MI Research
 Causal issue → Causal Research
-Hypothesis Set issue → Hypothesis Set Research
+Hypothesis Set / Thesis composition issue → Hypothesis Set / Production Thesis Research
 DNA mismatch → Market DNA Research
 Execution issue → Execution Research
 Supervisor issue → Supervisor Research
@@ -2004,12 +2233,29 @@ DNA_(t-1)
 
 `DNA_t → FeaturePriority_t` の同一Cycle逆流は禁止する。
 
-## Research vs Production
+## Research vs Production Thesis Builder
 
 ```text
-Research = Candidate / Evidence / Edgeを作る
-Production = Approved KnowledgeだけでRiskを取る
+Research / Knowledge Promotion
+= Hypothesis / Edgeを研究・検証・承認する
+
+Production Thesis Builder
+= Approved Knowledgeを現在市場へ照合しApplicableHypothesisSet / TradeThesisへ構成する
 ```
+
+未承認HypothesisをBuilderがProductionへ持ち込まない。
+
+## Production Thesis Builder vs Signal
+
+```text
+Production Thesis Builder
+= 今の市場で「どの承認済み仮説をどう組み合わせ、何を期待するか」を構成する
+
+Signal
+= そのTradeThesisに「Riskを取るだけの合理性・期待値があるか」を判断する
+```
+
+Builderは`expected_direction / expected_effect / expected_horizon`を表現できるが、`BUY / SELL / NO_TRADE`の最終DecisionはSignal Engineが持つ。
 
 ## Signal vs Defense
 
@@ -2073,6 +2319,7 @@ Feature Priority → wrong priority candidate
 Market Intelligence → unexplained move / event detection miss candidate
 Causal → strong alternative hypothesis
 Market DNA → novel regime candidate
+Production Thesis Builder → no applicable hypothesis / composition conflict / applicability gap
 Defense → possible over-blocking
 Execution → slippage anomaly
 Supervisor → oversensitivity candidate
@@ -2159,6 +2406,8 @@ Q7. 何十年維持する価値があるか？
 Q1〜Q5で解決できるなら原則新Top-Level Roleを追加しない。
 
 FIX-007の`Event Detection Processor`は、Canonical MarketEvent生成・Detection Rule適用・Event重複統合・Failure時の判定不能表現という独立責任を持つためRoleとして定義する。ただしMarket Observation Plane内の軽量Componentであり、新Top-Level Planeにはしない。
+
+FIX-008の`Production Thesis Builder`は、Approved Knowledgeを現在市場へ照合して`ApplicableHypothesisSet`と`TradeThesis`を生成する独立Input / Output / Failure責任を持つためProduction Roleとして定義する。ただしApplicability SelectionとThesis Compositionを2つの新Top-Level Layerへ分割せず、1Role内部のSubmoduleとして持つ。
 
 ---
 
