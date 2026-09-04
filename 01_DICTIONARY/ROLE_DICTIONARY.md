@@ -66,6 +66,8 @@ CausalHypothesis
 MarketDNA
 ApplicableHypothesisSet
 TradeThesis
+EntryThesis
+ProductionEvidence
 OrderIntent
 TradeResult
 ```
@@ -347,6 +349,7 @@ CONNECTION / ADAPTER
 - Tick size / Minimum order対応
 - API authentication interface
 - Order request / response conversion
+- ExecutionRecordの生成責任
 
 ## Inputs
 
@@ -369,6 +372,8 @@ CONNECTION / ADAPTER
 - BUY / SELL判断
 - Position Sizeの戦略判断
 - Trade Thesis生成
+- EntryThesis生成
+- ProductionEvidenceのSemantic生成責任
 - Market理解
 
 ---
@@ -1308,6 +1313,7 @@ uncertainty
 - Production Promotion Stageを勝手に昇格させる
 - Risk Limitを変更する
 - `SignalDecision` を生成する
+- `EntryThesis` を生成する
 - BUY / SELL / NO_TRADEを最終確定する
 - Thesisを作れない場合に不足情報を推測して捏造する
 
@@ -1413,6 +1419,7 @@ PRODUCTION ADVISORY
 - 最終Trade決定権
 - 未検証Hypothesisをその場でProduction Thesisへ追加
 - AI多数決を真実扱い
+- EntryThesis生成
 
 ## Failure Behavior
 
@@ -1455,6 +1462,7 @@ Production Thesis Builderが生成した現在のTradeThesisに、Riskを取る�
 ## Prohibitions
 
 - ApplicableHypothesisSet / TradeThesisのCanonical生成責任を吸収する
+- EntryThesis生成責任を持つ
 - Defense責任を吸収する
 - AIReviewResultだけで決定
 - 全情報を意味不明な一つの総合Scoreへ潰す
@@ -1496,6 +1504,7 @@ SignalDecisionが存在しても、現在Riskを取って安全かGateする。
 
 - Expected Valueを作る
 - TradeThesis生成
+- EntryThesis生成
 - BUY / SELL方向生成
 
 ## Research Feedback
@@ -1511,21 +1520,105 @@ PRODUCTION / EXECUTION
 
 ## Purpose
 
-SignalDecision / DefenseDecision承認後、どの注文計画で実行するか決める。
+SignalDecision / DefenseDecision承認後、実際にRiskを取る直前の判断根拠を`EntryThesis`として固定し、そのSnapshotに基づいて取引所非依存の`OrderIntent`を生成する。約定後はExecution Domain内部のLive Evidence Collectorが、ExecutionRecordとLive市場文脈から`ProductionEvidence`を生成する。
+
+## Owns
+
+- 標準注文計画
+- `Entry Snapshot Builder` の内部責任
+- `Live Evidence Collector` の内部責任
+- EntryThesisのCanonical生成責任
+- ProductionEvidenceのCanonical生成責任
 
 ## Inputs
 
+### Entry Snapshot / Order Intent生成
+
+- TradeThesis
+- ApplicableHypothesisSet reference
 - SignalDecision
 - DefenseDecision
+- RiskState
+- MarketContext
+- Current Confirmed MarketDNA
+- FeaturePriorityProfile
+- Evidence / Constraint references
+- Formula / Feature Version references
 - Risk Budget
 - Liquidity / Slippage information
 
+### Live Evidence生成
+
+- ExecutionRecord
+- Trade / Position reference
+- TradeThesis / EntryThesis reference
+- MarketContext
+- MarketEvent references
+- Funding / Fee / Liquidity / Latency information
+- QualityProfile / Diagnostics
+
 ## Outputs
 
+- EntryThesis
 - OrderIntent
+- ProductionEvidence
+- Diagnostics
+- ResearchCandidate（Entry timing / slippage / live execution anomaly等）
+
+## Internal Responsibility Split
+
+新しいTop-Level Roleを追加せず、Execution Domain内部で次を分離する。
+
+```text
+Execution Logic
+├─ Entry Snapshot Builder
+├─ Order Planning / OrderIntent Builder
+└─ Live Evidence Collector
+```
+
+### Entry Snapshot Builder
+
+`TradeThesis → SignalDecision → DefenseDecision`まで成立した後、実際に注文を生成する直前のKnowledge / Market / Risk / Versionを`EntryThesis`へ固定する。
+
+```text
+TradeThesis
+↓
+SignalDecision
+↓
+DefenseDecision
+↓
+RiskState / Current Market references確認
+↓
+Entry Snapshot Builder
+↓
+EntryThesis
+↓
+OrderIntent
+```
+
+### Order Planning / OrderIntent Builder
+
+EntryThesis生成成功後に、Position Size / Leverage / Order Type / Split / Stop / Take Profit / Slippage tolerance等を取引所非依存の`OrderIntent`へまとめる。
+
+### Live Evidence Collector
+
+Exchange Adapterが生成した`ExecutionRecord`をそのままProductionEvidenceとみなさず、実際のLive Productionで観測された約定品質・摩擦・Funding・Liquidity Impact等をLive Evidenceとして構造化する。
+
+```text
+ExecutionRecord
++ EntryThesis / TradeThesis
++ Live Market / Fee / Funding / Liquidity context
+↓
+Live Evidence Collector
+↓
+ProductionEvidence
+```
 
 ## Responsibilities
 
+- Entry時点のTradeThesis / Hypothesis Set / MarketContext / MarketDNA / FeaturePriority / Signal / Defense / Risk / Constraint / Versionを追跡可能なSnapshotへ固定する
+- `entry_snapshot_at` とEntry Snapshot Builder Versionを残す
+- EntryThesis生成成功後のみOrderIntent生成へ進む
 - Position Size
 - Leverage
 - Limit / Market
@@ -1533,18 +1626,88 @@ SignalDecision / DefenseDecision承認後、どの注文計画で実行するか
 - Stop / Take Profit
 - Slippage tolerance
 - Liquidity requirement
+- ExecutionRecordからActual Fill / Slippage / Fee / Partial Fill / Latency等のLive Evidenceを抽出・構造化する
+- Historical / Demo / Liveを混ぜずProductionEvidenceへ`LIVE` Channelを保持する
+- ProductionEvidenceが不完全な場合、Quality / Diagnosticsを落として保存可能にし、推測値で穴埋めしない
 
 ## Prohibitions
 
 - Exchange固有APIを直接実装
 - 市場仮説を作る
+- TradeThesis / SignalDecision / DefenseDecisionをEntry時に事後改変する
+- EntryThesis生成前にOrderIntentを生成する
+- Entry後にEntryThesisを書き換える
+- `ExecutionRecord = ProductionEvidence` とみなす
+- Historical / Demo EvidenceをProductionEvidenceへ無言で混ぜる
+- ProductionEvidence不足を推測値で正常化する
+- LoggerへObject生成責任を押し付ける
+
+## Failure Behavior
+
+### Entry Snapshot Failure
+
+次のような場合は`ENTRY_SNAPSHOT_NOT_BUILDABLE`として扱い、OrderIntentを生成しない。
+
+```text
+TradeThesis version不明
+ApplicableHypothesisSet参照不整合
+SignalDecision missing / expired
+DefenseDecision missing / blocked / invalid
+RiskState stale / unavailable
+Critical Context / DNA / Constraint reference不整合
+```
+
+`ENTRY_SNAPSHOT_NOT_BUILDABLE`の正式なResult表現は後続Processing Contractで固定する。
+
+### Live Evidence Failure
+
+取引・約定自体が成立していてProductionEvidenceの一部だけが取得不能な場合、Trade事実を消さない。ProductionEvidenceをDEGRADED / INCOMPLETE相当としてQuality / Diagnostics付きで保存し、後からResearch / Monitoringへ送れるようにする。
+
+## Research Feedback
+
+次をResearchCandidateへ戻せる。
+
+```text
+ENTRY_SNAPSHOT_TIMING_GAP
+ENTRY_TO_SUBMIT_MARKET_DRIFT
+SLIPPAGE_ANOMALY
+PARTIAL_FILL_ANOMALY
+LIVE_FEE_OR_FUNDING_DIVERGENCE
+LIQUIDITY_IMPACT_ANOMALY
+LIVE_EVIDENCE_INCOMPLETE
+DEMO_LIVE_EXECUTION_DIVERGENCE
+```
 
 ## Boundary
 
 ```text
-Execution Logic = 標準注文計画
-Exchange Adapter = 取引所固有実行
+Production Thesis Builder = Trade候補の論拠を構成
+Signal Engine = Riskを取りたいか判断
+Pre-Trade Defense = Riskを取ってよいか判断
+Entry Snapshot Builder = 実際にRiskを取る直前の理由を固定
+Execution Logic = どう注文するか
+Exchange Adapter = 取引所へどう送り、どう約定したかをExecutionRecord化
+Live Evidence Collector = Liveで実際に何が確認されたかをProductionEvidence化
+Logger = 生成済みObjectを改変せず保存するCustodian
+Post-Trade Analysis = 保存された事実の意味を分析するAnalyzer
 ```
+
+## FIX-009 Responsibility Principle
+
+```text
+Generator
+≠ Custodian
+≠ Analyzer
+```
+
+- EntryThesis Generator = Execution Logic / Entry Snapshot Builder
+- ProductionEvidence Generator = Execution Domain / Live Evidence Collector
+- Custodian = Logger
+- Analyzer = Post-Trade Analysis
+
+## Long-Term Notes
+
+Entry Snapshot / Live Evidence生成LogicはVersion管理し、何年後でも「どのVersionで何を固定・抽出したか」を再現可能にする。内部Submoduleは実装時に別`.py`へ分割可能だが、Architecture上はExecution Domain内責任として扱う。
 
 ---
 
@@ -1672,15 +1835,17 @@ PRODUCTION / EXIT
 # ROLE-LOG-001: Logger
 
 ## Category
-POST-TRADE / AUDIT
+POST-TRADE / AUDIT / CUSTODY
 
 ## Purpose
 
-Trade / Trial / Runtime処理の事実を追跡可能な形で記録する。
+各Generatorが生成したTrade / Trial / Runtime Objectと事実を、意味を変えず追跡可能な形で保存するCustodian。
 
 ## Inputs
 
 - Trade / Trial Events
+- EntryThesis
+- ProductionEvidence
 - SignalDecision / DefenseDecision / ExecutionRecord / PositionThesisState
 - MarketEvent / Trace references
 
@@ -1688,18 +1853,32 @@ Trade / Trial / Runtime処理の事実を追跡可能な形で記録する。
 
 - AuditEvent / immutable log records
 - TradeResult（Trade完了時）
+- Stored Object references
 
 ## Responsibilities
 
 - 事実保存
 - Version / Trace / Event ID保持
-- EntryThesis保存
+- EntryThesisを改変せず保存
+- ProductionEvidenceを改変せず保存
+- Generator / created_by_role / provenanceを失わない
 
 ## Prohibitions
 
+- EntryThesisを生成する
+- ProductionEvidenceを生成する
+- EntryThesis / ProductionEvidenceの意味を再解釈して書き換える
 - 「なぜ負けた」を確定する
 - ResearchResultを生成する
 - ログから勝手にTrainerへ送る
+
+## Boundary
+
+```text
+Generator = Objectを作る
+Logger / Custodian = 作られたObjectを改変せず保存する
+Post-Trade Analysis = 保存されたObjectの意味を分析する
+```
 
 ---
 
@@ -1710,13 +1889,14 @@ POST-TRADE / ANALYSIS
 
 ## Purpose
 
-TradeResult / Demo等の結果を、Trade OutcomeとHypothesis / Execution / Risk Outcomeへ分解する。
+TradeResult / ProductionEvidence / Demo等の結果を、Trade OutcomeとHypothesis / Execution / Risk Outcomeへ分解する。
 
 ## Inputs
 
 - Logger Records
 - TradeResult
 - EntryThesis
+- ProductionEvidence
 - Hypothesis states
 - ExecutionRecord
 
@@ -1735,11 +1915,21 @@ TradeResult / Demo等の結果を、Trade OutcomeとHypothesis / Execution / Ris
 
 - WIN / LOSSだけで評価しない
 - Trade成功とHypothesis正しさを分離
+- ExecutionRecordとProductionEvidenceを使い、Execution OutcomeとLive Evidenceを分けて分析する
 - Demo / Live divergence分析
 
 ## Prohibitions
 
+- EntryThesisを生成・改変する
+- ProductionEvidenceを生成・改変する
 - 分析結果を直接Production変更へ反映
+
+## Boundary
+
+```text
+ProductionEvidence = Liveで観測された事実寄りEvidence
+Post-Trade Analysis = そのEvidenceが何を意味するかを分析
+```
 
 ---
 
@@ -1776,7 +1966,8 @@ Market interpretation issue → MI Research
 Causal issue → Causal Research
 Hypothesis Set / Thesis composition issue → Hypothesis Set / Production Thesis Research
 DNA mismatch → Market DNA Research
-Execution issue → Execution Research
+Entry snapshot / Execution issue → Execution Research
+ProductionEvidence / Demo-Live divergence → Execution / Live Evidence Research
 Supervisor issue → Supervisor Research
 ```
 
@@ -2068,6 +2259,8 @@ EMERGENCY
 - DNA
 - Hypothesis
 - Trade Thesis
+- Entry Snapshot
+- Live Evidence Builder
 - Config
 - Code
 
@@ -2122,6 +2315,7 @@ Constraint
 ApplicableHypothesisSet
 TradeThesis
 EntryThesis
+ProductionEvidence
 OrderIntent
 TradeResult
 ```
@@ -2264,11 +2458,40 @@ Signal = 取りたいか
 Defense = 取ってよいか
 ```
 
-## Execution Logic vs Exchange Adapter
+## TradeThesis vs EntryThesis
 
 ```text
-Execution = どう注文するか
-Adapter = 取引所へどう送るか
+TradeThesis = 取引候補として構成された論拠
+EntryThesis = 実際にRiskを取る直前に固定した論拠・市場・Risk・VersionのImmutable Snapshot
+```
+
+EntryThesisはSignal / Defense成立後、OrderIntent生成前にEntry Snapshot Builderが生成する。
+
+## Execution Logic vs Exchange Adapter vs Live Evidence Collector
+
+```text
+Execution Logic = どう注文するか
+Exchange Adapter = 取引所へどう送り、どう約定したかをExecutionRecord化
+Live Evidence Collector = 実Liveで確認された約定品質・摩擦・Funding・Liquidity Impact等をProductionEvidence化
+```
+
+`ExecutionRecord ≠ ProductionEvidence` を維持する。
+
+## Generator vs Custodian vs Analyzer
+
+```text
+Generator = Semantic Objectを正式生成する
+Custodian = 生成済みObjectを改変せず保存する
+Analyzer = 保存された事実の意味を後から分析する
+```
+
+FIX-009では:
+
+```text
+EntryThesis Generator = Entry Snapshot Builder
+ProductionEvidence Generator = Live Evidence Collector
+Custodian = Logger
+Analyzer = Post-Trade Analysis
 ```
 
 ## Supervisor vs In-Trade Defense vs Exit
@@ -2320,8 +2543,9 @@ Market Intelligence → unexplained move / event detection miss candidate
 Causal → strong alternative hypothesis
 Market DNA → novel regime candidate
 Production Thesis Builder → no applicable hypothesis / composition conflict / applicability gap
+Execution / Entry Snapshot → entry timing / snapshot integrity issue
+Live Evidence Collector → slippage / partial fill / fee / funding / evidence completeness anomaly
 Defense → possible over-blocking
-Execution → slippage anomaly
 Supervisor → oversensitivity candidate
 Monitoring → resource growth anomaly
 ```
@@ -2408,6 +2632,8 @@ Q1〜Q5で解決できるなら原則新Top-Level Roleを追加しない。
 FIX-007の`Event Detection Processor`は、Canonical MarketEvent生成・Detection Rule適用・Event重複統合・Failure時の判定不能表現という独立責任を持つためRoleとして定義する。ただしMarket Observation Plane内の軽量Componentであり、新Top-Level Planeにはしない。
 
 FIX-008の`Production Thesis Builder`は、Approved Knowledgeを現在市場へ照合して`ApplicableHypothesisSet`と`TradeThesis`を生成する独立Input / Output / Failure責任を持つためProduction Roleとして定義する。ただしApplicability SelectionとThesis Compositionを2つの新Top-Level Layerへ分割せず、1Role内部のSubmoduleとして持つ。
+
+FIX-009の`Entry Snapshot Builder`と`Live Evidence Collector`は、独立したSemantic生成責任を持つが、Execution Domain内部責任として成立するため新Top-Level Roleへ昇格させない。実装時は別Module化できるが、Role Dictionary上は`ROLE-EXEC-001`の内部Submoduleとして管理する。
 
 ---
 
