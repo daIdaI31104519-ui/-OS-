@@ -152,30 +152,30 @@ J. PLATFORM / OPERATIONS OBJECTS
 DB等へ永続保存する主要Objectは、原則として次を持つ。
 
 ```yaml
-object_id:
-object_type:
-schema_version:
-object_version:
-created_at:
-updated_at:
-valid_from:
-valid_until:
-status:
-market_profile_id:
-trace_id:
-parent_object_ids: []
-source_refs: []
-provenance:
-quality_ref:
-uncertainty:
-created_by_role:
-code_version:
-config_version:
+object_id:              # Objectを一意に識別
+object_type:            # RawData / Evidence / TradeThesis 等
+schema_version:         # Data SchemaのVersion
+object_version:         # 同一論理ObjectのVersion
+created_at:             # 生成日時 UTC基準
+updated_at:             # 変更可能Objectのみ
+valid_from:             # 有効開始時刻がある場合
+valid_until:            # 有効期限がある場合
+status:                 # Lifecycleを持つ場合
+market_profile_id:      # BTCUSDT等の対象Profile
+trace_id:               # OS内部処理系列
+parent_object_ids: []   # 直接生成元Object
+source_refs: []         # 外部Source / Raw参照
+provenance:             # 生成経路
+quality_ref:            # Data Quality参照
+uncertainty:            # 不確実性
+created_by_role:        # 生成Role
+code_version:           # 再現性が必要な場合
+config_version:         # 再現性が必要な場合
 ```
 
 全Objectへ無条件ですべてを複製するのではなく、Objectの性質に応じて必須 / 任意をContractで定義する。
 
-FIX-012以降、`status`というGeneric FieldをHypothesis / Edgeの研究成熟度・Knowledge Aging / Health・Production Promotion・Risk Stateをまとめる万能Fieldとして使用しない。
+FIX-012以降、`status`をHypothesis / Edgeの研究成熟度・Knowledge Aging / Health・Production Promotion・Risk Stateをまとめる万能Fieldとして使用しない。
 
 ---
 
@@ -262,6 +262,13 @@ CausalEdge / EmpiricalEdge を別Objectとして使用
 → Edge + edge_type = CAUSAL_EDGE / EMPIRICAL_EDGE
 ```
 
+原則:
+
+- Legacy名を理由に新しいTable / Class / Objectを増やさない
+- 過去資料を読む時は上記Mappingで解釈する
+- Historical / OOS / Replay / Demo / Stress等の研究経路は、原則 `ResearchResult` の `evidence_source_channel` / `experiment_mode` / `trial_id` で区別する
+- Stress固有のFailure Boundary研究では、正式な `StressResult` を追加の専門Objectとして持つことができる。これは一般的なResearch結果名の乱立とは区別する
+
 ## Versioned Mutable Knowledge型
 
 研究進行により状態が変わる。
@@ -281,6 +288,16 @@ Constraint
 ## Ephemeral型
 
 Runtime内部の一時状態として扱え、永続保存を必須としない。
+
+例:
+
+```text
+短期Cache
+一時Queue Item
+Transient Health Probe
+```
+
+ただしFailure分析に必要なものはAudit / Diagnosticsへ保存する。
 
 ---
 
@@ -488,46 +505,138 @@ Signalが上限を書き換えない。
 
 State Machine上で実際に成功・適用された一回のState遷移を、誰が・なぜ・何を根拠に・どのVersionのState Machineで変更したかまで含めて保存するImmutable Historical Event Object。
 
+`StateTransitionEvent` はCurrent Stateそのものではなく、Stateが変化したという履歴上の事実を表す。
+
 ## Generator
 
 当該State Machineで正式にTransitionを適用したAuthorized State-owning Role / Authority。
 
+FIX-010では最終Authorityの割当そのものは確定せず、`requested_by_role / authorized_by_role / applied_by_role`を保存可能にする。最終Authority MatrixはFIX-013 /後続Contractで固定する。
+
 ## Custodian
 
 Logger / Audit Storage。
+
+LoggerはState変更を決定せず、生成済みStateTransitionEventを改変せず保存する。
+
+## Consumers
+
+- Current State Projection / State Machine
+- Governance / Audit
+- Monitoring
+- Research / Post-Trade
+- Recovery / Migration
+- Human Interface
 
 ## Main Fields
 
 ```yaml
 state_transition_event_id:
 target_object_ref:
+
 state_machine_id:
 state_machine_type:
 state_machine_version:
+
 from_state:
 to_state:
 expected_previous_state:
 transition_sequence:
+
 trigger_refs: []
 reason_codes: []
+
 requested_by_role:
 authorized_by_role:
 applied_by_role:
 requested_by_actor:
+
 transitioned_at:
 effective_at:
 created_at:
+
 manual_override_ref:
 authorization_ref:
 previous_transition_event_ref:
+
 trace_id:
 ```
 
+## FIX-010 Canonical Boundary
+
+```text
+Trigger / Request
+↓
+Transition Rule Check
+↓
+Authority Check
+↓
+Current State / expected_previous_state Check
+↓
+Transition Apply
+↓
+StateTransitionEvent
+↓
+Current State Projection Update
+↓
+Logger / Audit / Research / Monitoring
+```
+
+## Current State Relationship
+
+```text
+Current State
+= 現在値を高速参照するためのProjection / Cache
+
+StateTransitionEvent
+= 実際に適用された過去遷移のImmutable Historical Fact
+```
+
+Transition Historyを`transition_sequence`順にReplayすることで、対象State MachineのCurrent Stateを再構築可能な設計を目標とする。
+
 ## Invariants
 
-- 成功・適用されたTransitionだけを記録する
-- `state_machine_type`ごとの意味境界を失わない
-- FIX-012では同一Knowledgeに対するLifecycle / Knowledge Aging / Production Promotionを別々のStateTransitionEvent系列として保持する
+- 実際に成功・適用されたTransitionだけを`StateTransitionEvent`として生成する
+- Authority Check / Rule Check等で拒否されたTransition Attemptを成功Eventとして記録しない
+- `from_state` は適用直前のCurrent Stateと整合しなければならない
+- `expected_previous_state` を用いて古いStateを前提としたConcurrent / Stale Writeを検出可能にする
+- `to_state` は当該`state_machine_type / state_machine_version`で合法なStateでなければならない
+- `transition_sequence` は同一State Machine / Target内で順序を一意に追跡可能にする
+- `state_machine_version`を保持し、将来State定義が変化しても過去遷移を当時の意味で再現可能にする
+- `trigger_refs` と `reason_codes` を分け、何が起点だったかと、なぜ遷移したかを追跡可能にする
+- Authority provenanceとして`requested_by_role / authorized_by_role / applied_by_role`を必要に応じて保持する
+- Manual Overrideを通常自動遷移に偽装せず、`manual_override_ref / authorization_ref`から追跡可能にする
+- 生成後に過去Eventを削除・上書きしない
+- 判断訂正が必要な場合は元Eventを書き換えず、新しい合法TransitionまたはCorrection / Superseded関係を使う
+- Current Stateの高速Projectionが破損しても、正当なTransition Historyから再構築可能な設計を維持する
+- FIX-012では同一Knowledgeに対するLifecycle / Knowledge Aging / Production Promotionを別々の`state_machine_type`として履歴化する
+
+## Failed / Rejected Transition
+
+Transition Requestが拒否・失敗した場合、それは`StateTransitionEvent`ではない。
+
+```text
+Rejected / Failed Transition Attempt
+→ AuditEvent / Diagnostics / ApprovalDecision候補
+```
+
+必要性が将来確認された場合のみ、Object追加Gateを通して`StateTransitionAttempt`等を検討する。FIX-010では新Objectを増やさない。
+
+## StateTransitionEvent vs AuditEvent
+
+```text
+StateTransitionEvent
+= Stateが実際に変わった事実
+
+AuditEvent
+= 誰が何を操作・承認・変更要求したかという監査記録
+```
+
+同じState変更に両方が存在してよいが、同一Objectへ統合しない。
+
+## Long-Term Notes
+
+Hypothesis / Edge / Research / Risk / Runtime等ごとに個別の`HypothesisStateHistory` / `RiskStateHistory` / `RuntimeStateHistory` Objectを乱立させず、共通`StateTransitionEvent`を`state_machine_type`で区別する。
 
 ---
 
@@ -563,6 +672,10 @@ schema_version:
 - Source / Timestampを失わない
 - 後から再計算できる形を優先する
 
+## Retention
+
+長期保存方針はStorage Lifecycleで定義する。`Rawを残す原則` と `Storageは有限` をRetention / Compression / Archiveで両立させる。
+
 ---
 
 # OBJ-DATA-002: Observation
@@ -574,6 +687,12 @@ Raw DataをNormalizerが標準形式へ変換し、研究・比較可能な単�
 ## Owner
 
 Normalizer
+
+## Example
+
+```text
+open_interest = 12.4B at T
+```
 
 ## Main Fields
 
@@ -593,17 +712,38 @@ quality_ref:
 trace_id:
 ```
 
+## Invariants
+
+- Observationは正規化済みの観測値であり、市場現象の解釈ではない
+- RawData参照を必ず保持し、一次証拠まで逆引き可能にする
+- Timestamp / Unit / Symbol等の変換履歴を失わない
+- Normalization処理でMarket判断・Cause判断を混ぜない
+
 ---
 
 # OBJ-DATA-003: MarketEvent
 
 ## Meaning
 
-Observation / TimeSeriesMeasurement / Featureから検出された、「市場で何かが発生した」という事実寄りの現象を一意に識別するImmutable Event Object。
+Observation / TimeSeriesMeasurement / Featureから検出された、「市場で何かが発生した」という事実寄りの現象を一意に識別するImmutable Event Object。市場解釈・予測・因果主張とは分離する。
 
 ## Owner / Generator
 
 `ROLE-EVT-001: Event Detection Processor`
+
+Market IntelligenceはMarketEventのConsumer / Interpreterであり、Canonical MarketEventの直接Generatorではない。
+
+## Example
+
+```text
+OI_SHOCK
+ETF_FLOW_SHOCK
+LIQUIDITY_COLLAPSE
+FUNDING_RATE_JUMP
+LIQUIDATION_SHOCK
+VOLATILITY_EXPANSION
+SPREAD_WIDENING
+```
 
 ## Main Fields
 
@@ -611,25 +751,82 @@ Observation / TimeSeriesMeasurement / Featureから検出された、「市場�
 market_event_id:
 event_type:
 market_profile_id:
+
 detected_at:
 start_at:
 peak_at:
 end_at:
+
 detection_rule_ref:
 detection_rule_version:
 detector_version:
+
 observation_refs: []
 time_series_measurement_refs: []
 feature_refs: []
 source_refs: []
+
 event_magnitude:
 quality_ref:
 confidence:
 detector_health_at_detection:
+
 deduplication_key:
 canonicalization_refs: []
 trace_refs: []
 ```
+
+## FIX-007 Generation Boundary
+
+```text
+Observation / TimeSeriesMeasurement / Feature
+↓
+Event Detection Processor
+↓
+MarketEvent
+├→ Feature Priority
+├→ Market Intelligence
+├→ Causal Engine
+└→ Research
+```
+
+Meaning boundary:
+
+```text
+Observation = 何を観測したか
+Feature = どう測ったか
+MarketEvent = 何が発生したか
+MarketContext = 今どんな市場か
+CauseCandidate = なぜ発生した可能性があるか
+```
+
+## Invariants
+
+- MarketEventは事実寄りのEventであり、BUY / SELL・価格予測・因果確定を含めない
+- `BTC_WILL_CRASH` 等の予測をEvent Typeとして使わない
+- `WHALES_ARE_MANIPULATING_MARKET` 等の因果解釈をEvent Typeとして使わない
+- Market Intelligence / Causal Engineが事後的にCanonical MarketEventを直接追加しない
+- Trace IDとMarket Event IDを分離する
+- 同じ実市場Eventを複数Source / Observation / Trialで別Eventとして水増ししない
+- 複数Providerが同じ現象を観測した場合でも、必要に応じて一つのCanonical MarketEventへ統合し、Source / Observation参照は失わない
+- Event Detection Rule変更時は`detection_rule_version`を残し、過去Eventの意味を新Ruleで無言に書き換えない
+- `NO_EVENT_DETECTED` と `EVENT_DETECTION_UNAVAILABLE / DEGRADED` を区別する。Detector異常時の空Event一覧を「市場Eventなし」とみなさない
+- Data Quality低下時は`quality_ref / confidence / detector_health_at_detection`から下流が不確実性を判断できるようにする
+- Event時刻はCausal EngineのTemporal Order / Lag研究へ利用可能な形で保持する
+- MarketEvent生成後に意味を上書きするのではなく、訂正が必要ならCorrection / Superseded関係を用いる
+
+## Failure / Research Feedback
+
+Market Intelligenceが重要変化を認識したのに対応するCanonical MarketEventが存在しない場合、MIが直接Eventを作るのではなく:
+
+```text
+UnexplainedEvent / ResearchCandidate
+→ Event Detection Research
+```
+
+へ戻す。
+
+Detection Miss / False Positive / Duplicate Split / Duplicate Merge Error / Rule StalenessはEvent Detection自体の研究対象にできる。
 
 ---
 
@@ -638,6 +835,32 @@ trace_refs: []
 ## Status
 
 RETIRED / MERGED INTO `OBJ-DATA-002: Observation`
+
+## Reason
+
+旧定義では `Observation` と `NormalizedObservation` が意味・Owner・生成位置で重複していたため、FIX-001で一本化した。
+
+Canonical Flow:
+
+```text
+Collector
+→ RawData
+→ Normalizer
+→ Observation
+→ Data Quality
+→ Time Series Processor
+```
+
+## Migration Rule
+
+旧実装・旧資料で `NormalizedObservation` を参照している場合、新設計では `Observation` へMigrationする。
+
+旧ID `OBJ-DATA-004` は履歴追跡のため再利用しない。
+
+## Prohibitions
+
+- 新規コード・新規DB Schemaで `NormalizedObservation` を新しい独立Objectとして作らない
+- `Observation` と二重保存しない
 
 ---
 
@@ -665,6 +888,23 @@ input_refs: []
 quality_ref:
 formula_version:
 ```
+
+## Examples
+
+```text
+Delta
+Return
+Velocity
+Acceleration
+Persistence
+Percentile
+Volatility
+Lagged Value
+```
+
+## Invariants
+
+異なる時間窓を暗黙に混ぜない。
 
 ---
 
@@ -698,6 +938,12 @@ created_at:
 deprecated_at:
 ```
 
+## Invariants
+
+- Formulaを上書きして過去再現性を失わない
+- 数学的正しさと市場的妥当性を分ける
+- Production利用FormulaはResearch履歴を参照可能にする
+
 ---
 
 # OBJ-CALC-002: MeasurementResult
@@ -724,6 +970,10 @@ quality_ref:
 created_at:
 trace_id:
 ```
+
+## Invariants
+
+FormulaDefinitionと結果を分ける。
 
 ---
 
@@ -756,13 +1006,19 @@ valid_until:
 trace_id:
 ```
 
+## Invariants
+
+- BUY / SELL意味をFeature自体へ埋め込まない
+- Raw DataまでTrace可能にする
+- Formula Versionを必須参照とする
+
 ---
 
 # OBJ-FEAT-002: FeaturePriorityProfile
 
 ## Meaning
 
-現在Evaluation Cycleで、各Featureをどの程度注目する価値があるかを表す優先度Object。
+現在Evaluation Cycleで、各Featureをどの程度注目する価値があるかを表す優先度Object。FIX-006により、同一Cycleで後段生成されるMarketDNAを参照せず、原則としてPrevious Confirmed MarketDNAを利用する。
 
 ## Owner
 
@@ -776,9 +1032,9 @@ evaluation_cycle_id:
 market_profile_id:
 current_context_ref:
 current_event_refs: []
-previous_confirmed_dna_ref:
+previous_confirmed_dna_ref:      # 原則 DNA_(t-1)。Cold Startではnull可
 previous_confirmed_dna_as_of:
-dna_reference_mode:
+dna_reference_mode:              # PREVIOUS_CONFIRMED | COLD_START_BASELINE
 horizon:
 selected_features: []
 low_priority_features: []
@@ -786,10 +1042,48 @@ sentinel_features: []
 priority_reasons: []
 redundancy_map:
 quality_constraints:
-recompute_reason:
+recompute_reason:                # NORMAL_CYCLE | MAJOR_EVENT_NEW_CYCLE 等
 priority_version:
 created_at:
 valid_until:
+```
+
+## FIX-006 Cycle Invariants
+
+- Priority = Confidenceではない
+- Low Priority = Raw取得停止ではない
+- Safety Sentinel FeatureはPriority低下だけで観測停止しない
+- `previous_confirmed_dna_ref` は当該`evaluation_cycle_id`より前に確定済みのMarketDNAだけを参照する
+- **同一Evaluation Cycleで後段生成される`MarketDNA_t`を参照してはならない**
+- FeaturePriorityProfile生成後に、同CycleのMarketDNAを使ってPriority理由・選択Featureを事後改変しない
+- Previous Confirmed MarketDNAが存在しないCold Startでは、`dna_reference_mode = COLD_START_BASELINE` とし、Baseline Feature / Sentinel Feature / Current Basic Context中心で生成する
+- Major Regime / Structural Eventで再計算する場合は、同一Cycleを再帰更新せず新しい`evaluation_cycle_id`を発行する
+- `previous_confirmed_dna_ref` / `previous_confirmed_dna_as_of` / `priority_version` を保存し、後から当時のPriority判断を再現できるようにする
+
+## Canonical Cycle
+
+```text
+DNA_(t-1)
++
+Current Basic Context / already-available MarketEvent information
+↓
+FeaturePriority_t
+↓
+MarketIntelligence_t
+↓
+Causal_t
+↓
+MarketDNA_t
+↓
+次Evaluation Cycle
+```
+
+禁止:
+
+```text
+FeaturePriority_t
+→ MarketDNA_t
+→ FeaturePriority_t
 ```
 
 ---
@@ -829,6 +1123,12 @@ uncertainty:
 context_version:
 ```
 
+## Invariants
+
+Cause確定・BUY / SELLを含めない。
+
+MarketContextはMarketEventを解釈・文脈化できるが、MarketEventのCanonical生成責任を持たない。
+
 ---
 
 # OBJ-MI-002: Evidence
@@ -858,6 +1158,12 @@ evidence_source_channel:
 created_at:
 ```
 
+## Invariants
+
+- Evidence Source Channelを保持する
+- 同じ証拠を複数Hypothesisで共有する場合 `shared_evidence` として追跡する
+- Evidenceの数をそのまま強さとみなさない
+
 ---
 
 # OBJ-MI-003: Contradiction
@@ -883,6 +1189,12 @@ quality_ref:
 uncertainty:
 ```
 
+## Invariants
+
+Contradictionを削除して都合の良いEvidenceだけ残さない。
+
+`SOFT / HARD` のProduction Gateへの正式影響は後続Contractで確定する。
+
 ---
 
 # OBJ-MI-004: UnexplainedEvent
@@ -906,6 +1218,12 @@ why_unexplained:
 priority_candidate:
 research_candidate_ref:
 ```
+
+## Invariants
+
+説明不能時に物語を捏造しない。
+
+Market Intelligenceが重要変化を認識したのに対応するCanonical MarketEventが無い場合、UnexplainedEvent / ResearchCandidate経由でEvent Detection Researchへ戻し、Canonical MarketEventを直接捏造しない。
 
 ---
 
@@ -938,6 +1256,12 @@ uncertainty:
 status:
 ```
 
+## Invariants
+
+- Cause CandidateはCauseではない
+- 相関だけで原因確定しない
+- Effectより後の事象を無条件でCause化しない
+
 ---
 
 # OBJ-CAUSAL-002: EffectDefinition
@@ -963,6 +1287,10 @@ measurement_formula_ref:
 market_event_refs: []
 ```
 
+## Invariants
+
+Effect定義を後から都合よく変更して過去Trialを再解釈しない。変更時はVersionを分ける。
+
 ---
 
 # OBJ-CAUSAL-003: CausalHypothesis
@@ -980,12 +1308,10 @@ Causal Engine / Knowledge Domain
 ```yaml
 hypothesis_id:
 hypothesis_version:
-
 hypothesis_lifecycle_state:
 hypothesis_lifecycle_state_machine_version:
 hypothesis_latest_transition_event_ref:
 knowledge_lifecycle_ref:
-
 cause_candidate_refs: []
 effect_ref:
 mechanism:
@@ -1005,45 +1331,45 @@ last_validated_at:
 revalidation_due_at:
 ```
 
-## FIX-012 State Separation
-
-```text
-CausalHypothesis.hypothesis_lifecycle_state
-= Research maturity only
-
-KnowledgeLifecycleProfile
-= freshness / health
-
-HypothesisPoolEntry.production_stage
-= production permission
-
-RiskState
-= current OS safety permission
-```
-
-Hypothesis Lifecycle正式候補:
+## Candidate Lifecycle
 
 ```text
 DRAFT
-RESEARCHING
-SUPPORTED
-WEAK
-CONFLICTED
-APPROVED
-RETIRED
-REOPENED
+→ RESEARCHING
+→ SUPPORTED
+→ APPROVED
+→ RETIRED
+↘ WEAK / CONFLICTED
+↘ REOPENED → RESEARCHING
+```
+
+最終State集合は `STATE_DICTIONARY.md` で確定する。
+
+## FIX-012 State Separation
+
+```text
+hypothesis_lifecycle_state
+= Research maturity only
+
+knowledge_lifecycle_ref
+= Knowledge Aging / Health
+
+HypothesisPoolEntry.production_stage
+= Production permission
+
+RiskState
+= Current OS safety permission
 ```
 
 ## Invariants
 
-- `status = ACTIVE`のような万能StateでProduction可否を表さない
-- `AGING / STALE / DEGRADED`をHypothesis Lifecycleへ入れない
-- `PAUSED / NORMAL_LIVE`をHypothesis本体へ入れない
-- Knowledge Aging / Healthは`knowledge_lifecycle_ref`から別管理する
-- Production利用段階はHypothesisPoolEntry側で管理する
-- 一回のLoss / Live failureだけで研究上のAPPROVED履歴を自動消去しない
+- 1回当たっただけでSUPPORTEDにしない
+- 1回外れただけでRetireしない
 - Historical / OOS / Demo / Liveを混ぜない
 - Alternative / Contradictionを保持する
+- `ACTIVE / AGING / SUSPENDED`をHypothesis Lifecycleの新規Stateとして使わない
+- Knowledge Aging / HealthとProduction PromotionをHypothesis本体の`status`へ統合しない
+- Production利用段階は`HypothesisPoolEntry`で管理する
 
 ---
 
@@ -1073,17 +1399,40 @@ uncertainty:
 unique_event_count:
 ```
 
+## Invariants
+
+単一Composite ScoreだけでLifecycleやTrade可否を決定しない。
+
+表示用Scoreを将来持つ場合でも、元Dimensionを保存する。
+
 ---
 
 # OBJ-DNA-001: MarketDNA
 
 ## Meaning
 
-現在または過去の市場状態を比較・検索・研究できる正規化された圧縮表現。
+現在または過去の市場状態を比較・検索・研究できる正規化された圧縮表現。FIX-006では各MarketDNAを特定Evaluation Cycleの後段生成物として扱い、同CycleのFeature Priorityへ逆流させない。
 
 ## Owner
 
 Market DNA Role / Knowledge Domain
+
+## Candidate Axes
+
+```yaml
+trend:
+volatility:
+liquidity:
+leverage:
+derivatives:
+participant_flow:
+whale:
+etf_institution:
+macro_linkage:
+time_session:
+news_event_context:
+cross_market_correlation:
+```
 
 ## Main Fields
 
@@ -1106,6 +1455,17 @@ quality_ref:
 uncertainty:
 ```
 
+## Invariants
+
+- AIの説明不能なMystery Scoreにしない
+- 各軸からRaw / Feature / Formulaまで遡れる
+- Market DNA = 市場状態
+- Feature Priority = 何を見る価値が高いか
+- Signalを直接生成しない
+- `evaluation_cycle_id = t` で生成されたMarketDNAは、同じ`t`のFeaturePriorityProfile入力に使用しない
+- 当該MarketDNAは確定後、次Evaluation Cycle以降で`previous_confirmed_dna_ref`として参照可能になる
+- `previous_market_dna_ref`を保持する場合も、Current DNAとの世代関係を示すためであり、同Cycle再帰計算の許可を意味しない
+
 ---
 
 # OBJ-DNA-002: RegimeProfile
@@ -1118,6 +1478,16 @@ Market DNA / 市場状態を、ProductionやResearchで扱いやすい粗い分�
 
 Market DNA / Research
 
+## Example
+
+```text
+BULL
+BEAR
+RANGE
+HIGH_VOL
+LOW_LIQUIDITY
+```
+
 ## Main Fields
 
 ```yaml
@@ -1128,6 +1498,12 @@ classification_rule_version:
 confidence:
 valid_until:
 ```
+
+## Invariants
+
+独立した第二の市場状態体系としてMarket DNAと競合させない。
+
+RegimeとDNAの正式関係はArchitecture Canonical化時に最終固定する。
 
 ---
 
@@ -1142,6 +1518,32 @@ Researchへ送るべき未検証課題・疑問・異常・仮説候補を統一
 ## Owner
 
 Research Router / Research Orchestrator
+
+## Candidate Sources
+
+```text
+Causal Hypothesis
+Alternative Hypothesis
+Contradiction
+Feature Candidate
+Formula Candidate
+Market DNA Candidate
+Unexplained Event
+Novel Regime
+Unexpected Failure
+Unexpected Success
+Missed Opportunity
+Defense Block
+Supervisor Warning
+Execution Anomaly
+Entry Snapshot Integrity / Timing Gap
+Live Evidence Incomplete / Divergence
+Data Quality Anomaly
+Event Detection Miss / False Positive
+Production Thesis Applicability / Composition Gap
+Demo vs Live Divergence
+AI Review New Idea
+```
 
 ## Main Fields
 
@@ -1161,13 +1563,17 @@ created_at:
 expiry_or_revisit_at:
 ```
 
+## Invariants
+
+Research CandidateをそのままProductionへ利用しない。
+
 ---
 
 # OBJ-RSCH-002: ResearchPlan
 
 ## Meaning
 
-何を、どのEvidence Channel・Dataset・評価基準で検証するかを事前定義するVersioned研究計画Object。
+何を、どのEvidence Channel・Dataset・評価基準で検証するかを事前定義するVersioned研究計画Object。FIX-011ではResearchPlanの進行状況と編集可否を一つのstatusへ混ぜず、Lifecycle StateとLock Stateの2軸で独立管理する。
 
 ## Owner
 
@@ -1178,6 +1584,7 @@ Research Orchestrator
 ```yaml
 research_plan_id:
 plan_version:
+
 research_candidate_ref:
 target_object_refs: []
 research_question:
@@ -1191,19 +1598,109 @@ completion_criteria:
 data_scope:
 holdout_policy:
 resource_budget_ref:
+
 lifecycle_state:
 lifecycle_state_machine_version:
 lifecycle_latest_transition_event_ref:
+
 lock_state:
 lock_state_machine_version:
 lock_latest_transition_event_ref:
+
 pre_registered_at:
 frozen_at:
+
 supersedes_plan_ref:
 superseded_by_plan_ref:
+
 created_at:
 updated_at:
 ```
+
+## FIX-011 State Separation
+
+```text
+ResearchPlan Identity / Version
+        ├→ ResearchPlan Lifecycle
+        │   DRAFT / READY / ACTIVE / COMPLETED / SUPERSEDED / CANCELLED
+        │
+        └→ ResearchPlan Lock State
+            EDITABLE / PRE_REGISTERED / FROZEN
+```
+
+Meaning:
+
+```text
+Lifecycle State
+= このPlan Versionの研究計画が今どの進行段階にあるか
+
+Lock State
+= このPlan Versionの評価規則・Data Scope・Metric・Stop Rule等をどの程度変更してよいか
+
+plan_version
+= 研究計画内容の世代
+```
+
+## StateTransitionEvent Relationship
+
+LifecycleとLockは別State Machineとして扱う。
+
+```text
+ResearchPlan Lifecycle transition
+→ StateTransitionEvent(state_machine_type = RESEARCH_PLAN_LIFECYCLE)
+
+ResearchPlan Lock transition
+→ StateTransitionEvent(state_machine_type = RESEARCH_PLAN_LOCK)
+```
+
+同一ResearchPlanに両方の履歴が存在できる。
+
+例:
+
+```text
+Lifecycle = ACTIVE
+Lock = FROZEN
+```
+
+は正常な組み合わせである。
+
+## Version / Freeze Rule
+
+`frozen_at`はLock Stateの正本ではなく、FROZENへ入った時刻を補助的に記録するTimestamp。
+
+```text
+lock_state = FROZEN
+= 編集可否のCurrent State
+
+frozen_at
+= Freeze時刻Metadata
+```
+
+FROZEN後に研究条件を意味変更する必要がある場合、同じPlan Versionを無言で上書きしない。
+
+```text
+Plan v3 = FROZEN
+↓ meaningful change required
+Plan v4 = DRAFT / EDITABLE
+↓
+PRE_REGISTERED / FROZEN
+↓
+新しいTrial / 必要なら新しいT0
+```
+
+## Invariants
+
+- Lifecycle StateとLock Stateを一つの`status`へ統合しない
+- `ACTIVE + FROZEN` は合法であり、LifecycleとLockを相互排他的に扱わない
+- `ACTIVE` だから研究条件を自由編集できるとは扱わない
+- `FROZEN` だからLifecycleもFROZENとは扱わない
+- `frozen_at`だけからLock Stateを推定しない
+- FROZEN Planの評価基準・Data Scope・Metric・Stop Rule等を結果を見てから都合よく上書きしない
+- FROZEN後のMeaningful Changeは新しい`plan_version`を作る
+- Lifecycle TransitionとLock Transitionは別`StateTransitionEvent`として履歴化する
+- `lifecycle_state_machine_version / lock_state_machine_version`を保持し、過去Planを当時のState定義で再現可能にする
+- `SUPERSEDED`になった旧Plan / Versionを削除せず、後続Trialの再現に利用できるよう保持する
+- Demo Forward / protected holdout等でどのLock Stateを開始条件に要求するかはResearch / Data / Processing Contractで正式化する
 
 ---
 
@@ -1211,7 +1708,7 @@ updated_at:
 
 ## Meaning
 
-特定ResearchPlan Versionに基づいて実行される一つの試行。
+特定ResearchPlan Versionに基づいて実行される一つの試行。FIX-011ではTrialが「どのPlan Version・どのLock状態を前提に開始されたか」を固定参照し、後から新しいPlan Versionで旧Trialを再解釈しない。
 
 ## Owner
 
@@ -1227,6 +1724,7 @@ plan_lifecycle_state_at_start:
 plan_lifecycle_transition_ref:
 plan_lock_state_at_start:
 plan_lock_transition_ref:
+
 experiment_mode:
 evidence_source_channel:
 t0:
@@ -1239,13 +1737,47 @@ finished_at:
 status:
 ```
 
+## FIX-011 Plan Binding
+
+Trial開始時に使用したResearchPlanを、少なくとも概念上次で固定する。
+
+```text
+ResearchTrial
+→ exact ResearchPlan reference
+→ exact plan_version
+→ Lifecycle State at Trial start
+→ Lock State at Trial start
+→ corresponding StateTransitionEvent references
+```
+
+Planが後で更新・SUPERSEDEDされても、既存TrialのPlan bindingを新Versionへ差し替えない。
+
+Protected Research Modeでは後続Contractで例として:
+
+```text
+experiment_mode = DEMO_FORWARD
+→ plan_lock_state_at_start must be FROZEN
+```
+
+等のHard Gateを定義可能にする。
+
+## Invariants
+
+- Demo ForwardではT0以降だけを評価する
+- Rule変更時は同じTrialを上書きせず、新Plan Version / 新Trial / 必要なら新T0を作る
+- Trial数とUnique Market Event数を分離する
+- Trialが使用した`research_plan_version`を後から書き換えない
+- 旧Trialを新しいResearchPlan Versionの結果として再解釈しない
+- `plan_lock_state_at_start` はTrial開始時のSnapshotであり、後からPlanのCurrent Lock Stateが変わっても書き換えない
+- LifecycleとLockのStateTransitionEvent参照を混同しない
+
 ---
 
 # OBJ-RSCH-004: ResearchResult
 
 ## Meaning
 
-ResearchTrialで観測された結果を保存する正式な共通研究結果Object。
+ResearchTrialで観測された結果を、結論とDiagnosticsを分けて保存する正式な共通研究結果Object。
 
 ## Owner
 
@@ -1268,6 +1800,13 @@ contradictions: []
 produced_candidate_refs: []
 created_at:
 ```
+
+## Invariants
+
+- 失敗結果も保存する
+- Historical / OOS / Regime / Replay / Demo等の違いを理由に `HistoricalValidationResult` 等の別Result Objectを乱立させない
+- 研究経路は `ResearchTrial.experiment_mode`、`evidence_source_channel`、Trial参照で区別する
+- Stress固有の境界情報が必要な場合は、ResearchResultとTrace可能な `StressResult` / `FailureBoundary` を併用できる
 
 ---
 
@@ -1298,6 +1837,10 @@ assessment_profile:
 created_at:
 ```
 
+## Invariants
+
+Historical 4200 + Demo 420 + Live 28を単純4648件として扱わない。
+
 ---
 
 # OBJ-RSCH-006: ApplicabilityProfile
@@ -1326,13 +1869,17 @@ known_exclusions: []
 last_validated_at:
 ```
 
+## Invariants
+
+「有効 / 無効」だけでなく条件付き適用性を保持する。
+
 ---
 
 # OBJ-RSCH-007: Edge
 
 ## Meaning
 
-Researchで再現可能性・期待値・適用条件が確認された利用可能な優位性Object。FIX-012以降、Edge LifecycleはEdgeとしての研究成熟度だけを表し、Knowledge Aging / Health・Production Promotion・Risk Stateを混ぜない。
+Researchで再現可能性・期待値・適用条件が確認された利用可能な優位性Object。FIX-012以降、Edge Lifecycleは研究・承認成熟度だけを表し、Knowledge Aging / Health・Production Promotion・Risk Stateを混ぜない。
 
 ## Owner
 
@@ -1350,12 +1897,10 @@ EMPIRICAL_EDGE
 ```yaml
 edge_id:
 edge_type:
-
 edge_lifecycle_state:
 edge_lifecycle_state_machine_version:
 edge_latest_transition_event_ref:
 knowledge_lifecycle_ref:
-
 source_hypothesis_refs: []
 mechanism_or_pattern:
 expected_effect:
@@ -1382,13 +1927,11 @@ REOPENED
 
 ## Invariants
 
-- `ACTIVE`をEdge Lifecycleへ入れない
-- `DEGRADED / STALE / AGING`をEdge Lifecycleへ入れない
-- `PAUSED / NORMAL_LIVE`をEdge本体へ入れない
-- Edge health低下はKnowledgeLifecycleProfileへ送る
-- Production利用段階はHypothesisPoolEntryへ送る
 - 因果説明が強い = EVが正とは限らない
 - Empirical EdgeもOOS / Demo等の再現性を要求する
+- `ACTIVE / DEGRADED / SUSPENDED`をEdge Lifecycleの新規Stateとして使用しない
+- Knowledge Aging / Healthは`knowledge_lifecycle_ref`で別管理する
+- Production利用段階は`HypothesisPoolEntry.production_stage`で管理する
 
 ---
 
@@ -1416,6 +1959,10 @@ max_hypothesis_set_size:
 max_combination_count:
 priority_policy_version:
 ```
+
+## Invariants
+
+Researchの価値と計算資源を別々に無限化しない。
 
 ---
 
@@ -1447,6 +1994,10 @@ trade_result_refs: []
 outcome_summary:
 case_tags: []
 ```
+
+## Invariants
+
+Case LibraryはこのObjectへのViewであり、別コピーを作らない。
 
 ---
 
@@ -1530,6 +2081,10 @@ reproduction_refs: []
 created_at:
 ```
 
+## Invariants
+
+単なるError Logで終わらせない。重要FailureはBoundary / Constraint / Recovery Knowledgeへ昇格可能にする。
+
 ---
 
 # OBJ-KNW-005: StressResult
@@ -1581,6 +2136,10 @@ supporting_stress_results: []
 uncertainty:
 ```
 
+## Invariants
+
+Boundaryが未知ならUNKNOWNを明示する。
+
 ---
 
 # OBJ-KNW-007: Constraint
@@ -1592,6 +2151,15 @@ Researchで得たFailureBoundary等をProductionの適用・禁止・修正条�
 ## Owner
 
 Knowledge Promotion / Risk Governance
+
+## Candidate Types
+
+```text
+REQUIRE
+EXCLUDE
+MODIFY
+ALLOW
+```
 
 ## Main Fields
 
@@ -1607,6 +2175,10 @@ status:
 effective_from:
 review_due_at:
 ```
+
+## Invariants
+
+ConstraintはBUY / SELL方向を生成しない。
 
 ---
 
@@ -1634,6 +2206,10 @@ created_at:
 last_reviewed_at:
 ```
 
+## Invariants
+
+同じ無駄研究を繰り返さない。ただし構造変化時のReopen条件を持てる。
+
 ---
 
 # OBJ-KNW-009: KnowledgeRelationship
@@ -1645,6 +2221,20 @@ Knowledge Object同士の関係を一元的に表すGraph Edge Object。
 ## Owner
 
 Knowledge Domain
+
+## Example Types
+
+```text
+SUPPORTS
+CONTRADICTS
+DEPENDS_ON
+DERIVED_FROM
+APPLIES_TO
+FAILS_UNDER
+SUPERSEDES
+DUPLICATES
+RELATED_TO
+```
 
 ## Main Fields
 
@@ -1659,13 +2249,17 @@ valid_from:
 valid_until:
 ```
 
+## Invariants
+
+Knowledge GraphはRelationshipを表示するViewであり、別Knowledgeを複製しない。
+
 ---
 
 # OBJ-KNW-010: KnowledgeLifecycleProfile
 
 ## Meaning
 
-Knowledgeの現在の鮮度・再検証必要性・最近のEvidenceに基づく健全性を管理する長期運用Object。FIX-012以降、Edge maturity・Production permission・Risk Stateを持たない。
+Knowledgeの年齢・鮮度・劣化・再検証必要性を管理する長期運用Object。FIX-012以降、Edge maturity・Production permission・Risk Stateを混ぜない。
 
 ## Owner
 
@@ -1676,17 +2270,14 @@ Knowledge Aging Governance
 ```yaml
 knowledge_lifecycle_id:
 target_object_ref:
-
-knowledge_aging_state:
-state_machine_version:
-latest_transition_event_ref:
-
 created_at:
 last_validated_at:
 last_demo_pass_at:
 last_live_evidence_at:
 revalidation_due_at:
-
+knowledge_aging_state:
+state_machine_version:
+latest_transition_event_ref:
 degradation_reason_codes: []
 review_reason_codes: []
 ```
@@ -1702,7 +2293,9 @@ DEGRADED
 ARCHIVED
 ```
 
-## FIX-012 Removed Fields / Semantics
+## FIX-012 Migration
+
+旧Fields / Semantics:
 
 ```text
 staleness_state
@@ -1715,13 +2308,13 @@ current_risk_stage
 → 削除。Risk Stateの責任
 
 reopen_or_suspend_reason
-→ 分解し、degradation_reason_codes / review_reason_codes等で意味を限定
+→ degradation_reason_codes / review_reason_codes等へ意味分離
 ```
 
 ## Invariants
 
 - 一度SUPPORTED / APPROVEDになったKnowledgeを永久真理として扱わない
-- Knowledge `DEGRADED`だけで研究上のAPPROVED履歴を無言で削除しない
+- `DEGRADED`だけで研究上のAPPROVED履歴を自動取消ししない
 - Knowledge Aging / HealthをProduction `PAUSED`と混同しない
 - Risk StateをこのObjectへコピーしない
 
@@ -1733,7 +2326,7 @@ reopen_or_suspend_reason
 
 ## Meaning
 
-Productionが参照するHypothesis / Edgeの登録情報。FIX-012では研究成熟度・Knowledge Aging / Health・Production Promotion Stageを別参照として保持し、Risk StateはPool Entryへ埋め込まない。
+Productionが参照するHypothesis / Edgeの登録情報。FIX-012では研究成熟度・Knowledge Aging / Health・Production Promotion Stageを別参照として保持するEntry Object。
 
 ## Owner
 
@@ -1743,64 +2336,54 @@ Knowledge Promotion / Production
 
 ```yaml
 pool_entry_id:
-
 target_knowledge_ref:
 target_lifecycle_state_ref:
 knowledge_lifecycle_ref:
-
 production_stage:
-max_production_stage:
-
 applicability_ref:
 constraint_refs: []
 assessment_profile_ref:
 evidence_package_ref:
+max_production_stage:
 expires_or_review_due_at:
 ```
 
-## FIX-012 Four-Axis Boundary
+## State Separation
 
 ```text
-Target Knowledge Lifecycle
-= research maturity
+Target Lifecycle State
+= Hypothesis / Edgeの研究成熟度
 
-knowledge_lifecycle_ref
-= freshness / health
+KnowledgeLifecycleProfile
+= Knowledge Aging / Health
 
-production_stage / max_production_stage
-= production permission
+Production Promotion Stage
+= RESEARCH_ONLY / SHADOW / DEMO_FORWARD / MICRO_LIVE / LIMITED_LIVE / NORMAL_LIVE / PAUSED
 
-RiskState
-= current OS safety permission, referenced separately downstream
+Risk State
+= Current OS safety permission。Pool Entryへ埋め込まない
 ```
 
-## Migration
-
-旧:
+## FIX-012 Field Migration
 
 ```text
 hypothesis_or_edge_ref
+→ target_knowledge_ref
+
 hypothesis_state_ref
-```
-
-新:
-
-```text
-target_knowledge_ref
-target_lifecycle_state_ref
+→ target_lifecycle_state_ref
 ```
 
 Edgeも同じPool Entryを利用するため、Hypothesis専用に見えるField名を廃止する。
 
 ## Invariants
 
-- `SUPPORTED / APPROVED` と `DEMO_FORWARD / NORMAL_LIVE` を同じstatus列挙へ入れない
-- ProductionはLifecycle、Knowledge Aging / Health、Production Stage、Applicability、Constraint、Risk Stateを別々に確認する
-- `APPROVED`だけでProduction利用可能と判断しない
-- `CURRENT`だけでProduction利用可能と判断しない
-- `NORMAL_LIVE`でもRisk StateがNO_NEW_ENTRY / EMERGENCYなら新規Tradeを許可しない
-- `max_production_stage` をRisk Stateと混同しない
+- `SUPPORTED` と `DEMO_FORWARD` を同じstatus列挙へ入れない
+- `APPROVED` は研究成熟度であり、現在市場で即取引可能という意味ではない
+- Productionは `target_lifecycle_state_ref`、`knowledge_lifecycle_ref`、`production_stage`、Applicability、Constraint、Risk Stateを別々に確認する
 - 未承認Hypothesis / EdgeをProductionが自由に有効化しない
+- `max_production_stage` をRisk Stateと混同しない
+- `NORMAL_LIVE`でもRisk Stateが`NO_NEW_ENTRY / EMERGENCY`なら新規Trade許可を意味しない
 
 ---
 
@@ -1814,6 +2397,18 @@ Approved / production-eligibleなHypothesis / Edgeのうち、現在のMarketCon
 
 `ROLE-PRD-001: Production Thesis Builder`
 
+Knowledge PromotionはApproved Poolを供給するが、現在市場でのApplicable Setを直接生成しない。
+Signal EngineはApplicableHypothesisSetを利用するが、Canonical Set生成責任を持たない。
+
+## Roles
+
+```text
+PRIMARY
+SUPPORTING
+CONDITIONAL
+CONTRADICTING
+```
+
 ## Main Fields
 
 ```yaml
@@ -1824,15 +2419,18 @@ market_profile_id:
 market_context_ref:
 market_dna_ref:
 horizon:
+
 selected_pool_entry_refs: []
 applicability_profile_refs: []
 assessment_profile_refs: []
 knowledge_lifecycle_refs: []
 production_stage_snapshot:
+
 primary_hypothesis_refs: []
 supporting_hypothesis_refs: []
 conditional_hypothesis_refs: []
 contradicting_hypothesis_refs: []
+
 shared_evidence_map:
 dependency_map:
 redundancy_map:
@@ -1845,12 +2443,42 @@ created_at:
 valid_until:
 ```
 
+## FIX-008 Generation Boundary
+
+```text
+Approved Hypothesis / Edge Pool
++ Current MarketContext
++ Current Confirmed MarketDNA
++ ApplicabilityProfile
++ Constraint
++ HypothesisAssessmentProfile
++ KnowledgeLifecycleProfile
++ Production Promotion Stage
++ Quality / Uncertainty
+↓
+Production Thesis Builder
+↓
+ApplicableHypothesisSet
+↓
+TradeThesis
+↓
+Signal Engine
+```
+
 ## Invariants
 
-- `Approved != Applicable != Trade-worthy`
-- Lifecycle / Knowledge Aging / Production Stageを別々に確認する
-- Risk Stateは最終Safety判断まで独立して保持する
-- Shared Evidenceを二重評価しない
+- `Approved != Applicable`。承認済みでも現在条件に適用できなければSetへ入れない
+- DRAFT / RESEARCHING / 未承認HypothesisをLive用ApplicableHypothesisSetへ入れない
+- Production Promotion Stage / `max_production_stage` を超えた利用を許可しない
+- 仮説数の多数決でDirectionを決めない
+- PRIMARY / SUPPORTING / CONDITIONAL / CONTRADICTINGの意味を保持する
+- Shared Evidenceを複数Hypothesisの独立Evidenceとして二重評価しない
+- Dependency / Redundancy / Common Causeを隠さない
+- Constraint違反を単なる弱い減点として隠さない
+- Knowledge Aging / Health / Revalidation requirementを無視しない
+- Lifecycle / Knowledge Aging / Production Stageを一つのStatusへ圧縮しない
+- Set生成時点のBuilder Versionと参照したMarketContext / MarketDNA / Applicability / Lifecycle / Production Stageを追跡可能にする
+- 生成後に現在Knowledgeが変化しても過去Setを無言で書き換えない
 
 ---
 
@@ -1858,11 +2486,13 @@ valid_until:
 
 ## Meaning
 
-Production Thesis BuilderがApplicableHypothesisSetを現在市場で検討可能な一つの取引論拠へ構成したImmutable Object。
+Production Thesis BuilderがApplicableHypothesisSetを現在市場で検討可能な一つの取引論拠へ構成したImmutable Object。TradeThesisは「何を期待しているか」を表すが、最終的な`BUY / SELL / NO_TRADE` Decisionそのものではない。
 
 ## Owner / Generator
 
 `ROLE-PRD-001: Production Thesis Builder`
+
+Signal EngineはTradeThesisを評価して`SignalDecision`を生成するConsumerであり、TradeThesisのCanonical Generatorではない。
 
 ## Main Fields
 
@@ -1874,20 +2504,24 @@ market_profile_id:
 market_context_ref:
 market_dna_ref:
 hypothesis_set_ref:
+
 expected_direction:
 expected_effect:
 expected_horizon:
 expected_value_profile:
+
 primary_hypothesis_refs: []
 supporting_hypothesis_refs: []
 conditional_hypothesis_refs: []
 contradicting_hypothesis_refs: []
+
 supporting_evidence_refs: []
 contradiction_refs: []
 shared_evidence_map:
 dependency_map:
 redundancy_map:
 common_cause_map:
+
 main_risks: []
 invalidation_conditions: []
 constraint_refs: []
@@ -1896,6 +2530,35 @@ uncertainty:
 created_at:
 valid_until:
 ```
+
+## FIX-008 Meaning Boundary
+
+```text
+ApplicableHypothesisSet
+= 今の市場で利用可能なApproved Hypothesis / Edgeを役割付きで束ねたもの
+
+TradeThesis
+= そのSetから、何を・なぜ・どのHorizonで期待するかを構成した論拠
+
+SignalDecision
+= そのTradeThesisに対して実際にBUY / SELL / NO_TRADEを判断したDecision
+```
+
+## Invariants
+
+- `Approved != Applicable != Trade-worthy` を崩さない
+- TradeThesisは複数仮説の平均・多数決ではない
+- TradeThesisは必ずCanonical `ApplicableHypothesisSet` を参照する
+- 新しいAI案・未検証Hypothesisをその場で追加しない
+- Shared Evidenceを重複加点しない
+- Dependency / Redundancy / Common Causeを消さない
+- Contradicting Hypothesis / Contradictionを都合よく削除しない
+- Constraint / Quality / Uncertaintyを保持する
+- `expected_direction` は論拠上の期待方向であり、`SignalDecision.decision` と同一ではない
+- Production Thesis BuilderはTradeThesisから直接注文を生成しない
+- SignalとTrade Thesisを同一Objectにしない
+- TradeThesisを構成できない場合、情報を捏造して空・弱いThesisを生成しない。`THESIS_NOT_BUILDABLE` はTradeThesis ObjectそのものではなくDiagnostics / Processing Contract上の非成立結果として扱う
+- Builder Versionと入力参照を保持し、過去Tradeで当時のThesis構成を再現可能にする
 
 ---
 
@@ -1926,6 +2589,12 @@ uncertainty:
 new_research_candidate_refs: []
 ```
 
+## Invariants
+
+AI ReviewはAdvisory。AI停止時も本番経路を成立可能にする。
+
+AIが新しいHypothesisを提案しても、現在TradeThesisへ直接追加せずResearchCandidateへ送る。
+
 ---
 
 # OBJ-PRD-005: SignalDecision
@@ -1954,6 +2623,13 @@ reason_codes: []
 created_at:
 valid_until:
 ```
+
+## Invariants
+
+- 万能総合点だけで決めない
+- NO_TRADEも必要に応じて研究可能なDecisionとして保存する
+- Signal EngineはApplicableHypothesisSet / TradeThesisのCanonical Generatorではない
+- `THESIS_NOT_BUILDABLE` と `NO_TRADE` を混同しない。前者は有効Thesisが成立していない状態、後者は有効Thesisを評価したうえでRiskを取らないDecision
 
 ---
 
@@ -1988,6 +2664,12 @@ reason_codes: []
 created_at:
 ```
 
+## Invariants
+
+Signal = 取りたいか。
+Defense = 今取ってよいか。
+両者を統合しない。
+
 ---
 
 # OBJ-PRD-007: RiskState
@@ -2018,6 +2700,7 @@ risk_state_id:
 state:
 trigger_refs: []
 money_dd_state:
+knowledge_health_state:
 execution_health_state:
 data_health_state:
 market_novelty_state:
@@ -2029,10 +2712,13 @@ review_condition:
 
 ## Invariants
 
-- `RiskState` はKnowledge maturityを表さない
+- 損失発生後だけでなく、Knowledge / Data / Execution劣化もRisk縮小理由になり得る
+- `RiskState` はHypothesis / Edgeの研究成熟度を表さない
 - `RiskState` は個別KnowledgeのProduction Promotion Stageを表さない
 - KnowledgeLifecycleProfileへRisk Stateを複製しない
-- `NORMAL_LIVE`のKnowledgeが存在してもRiskState = NO_NEW_ENTRYなら新規Entryは禁止
+- `NORMAL_LIVE` Knowledgeが存在してもRiskState = `NO_NEW_ENTRY`なら新規Entryは禁止
+
+数値閾値はResearch / Risk Designで別途定義する。
 
 ---
 
@@ -2065,6 +2751,13 @@ execution_constraints: []
 created_at:
 expires_at:
 ```
+
+## Invariants
+
+- Exchange固有payloadをCoreへ漏らさない
+- `entry_thesis_ref` を持たないProduction OrderIntentを生成しない
+- EntryThesis生成失敗時にOrderIntentを作らない
+- OrderIntent生成後にEntryThesisを事後改変しない
 
 ---
 
@@ -2099,6 +2792,11 @@ exchange_status:
 diagnostics_ref:
 ```
 
+## Invariants
+
+- Strategy OutcomeとExecution Outcomeを分離可能にする
+- ExecutionRecordは注文がどう送信・約定されたかの一次実行証拠であり、ProductionEvidenceそのものではない
+
 ---
 
 # OBJ-PRD-010: EntryThesis
@@ -2114,6 +2812,16 @@ diagnostics_ref:
 ## Custodian
 
 `ROLE-LOG-001: Logger`
+
+Loggerは生成済みEntryThesisを改変せず保存する。Canonical生成責任を持たない。
+
+## Consumers
+
+- Order Planning / Execution Logic
+- Position Supervisor
+- Logger
+- Post-Trade Analysis
+- Research
 
 ## Main Fields
 
@@ -2140,6 +2848,35 @@ uncertainty:
 trace_id:
 ```
 
+## FIX-009 Generation Boundary
+
+```text
+TradeThesis
+↓
+SignalDecision
+↓
+DefenseDecision
+↓
+RiskState / Current Market references確認
+↓
+Entry Snapshot Builder
+↓
+EntryThesis
+↓
+OrderIntent
+```
+
+## Invariants
+
+- EntryThesisはTradeThesisそのものではなく、実際にRiskを取る直前の判断根拠Snapshot
+- EntryThesis生成前にOrderIntentを作らない
+- `SignalDecision` / `DefenseDecision` / `RiskState` / `TradeThesis` / `ApplicableHypothesisSet`へのTraceを失わない
+- `entry_snapshot_at` と `snapshot_builder_version` を保持する
+- Entry後にMarketDNA / Hypothesis State / Evidence / TradeThesisが更新されてもEntryThesisを書き換えない
+- Snapshot生成時に不足した必須情報を推測して埋めない
+- `ENTRY_SNAPSHOT_NOT_BUILDABLE` の場合はOrderIntent生成を禁止する
+- Correctionが必要な場合も元Snapshotを無言で上書きせず、Correction / Superseded関係を使う
+
 ---
 
 # OBJ-PRD-011: PositionThesisState
@@ -2162,6 +2899,8 @@ THESIS_WEAKENING
 THESIS_INVALIDATED
 ```
 
+EMERGENCYはIn-Trade Defense側のSafety状態として分離する。
+
 ## Main Fields
 
 ```yaml
@@ -2179,6 +2918,10 @@ reason_codes: []
 persistence_duration:
 change_magnitude:
 ```
+
+## Invariants
+
+短期ノイズで状態が頻繁反転しないよう、Hysteresis / Persistence規則を後続設計で持つ。
 
 ---
 
@@ -2205,6 +2948,10 @@ in_trade_defense_ref:
 created_at:
 ```
 
+## Invariants
+
+Position Supervisorの助言と最終Exit判断を分離する。
+
 ---
 
 # OBJ-PRD-013: ProductionEvidence
@@ -2217,9 +2964,17 @@ ExecutionRecordとLive市場文脈から、実市場でしか得られない約�
 
 `ROLE-EXEC-001: Execution Domain / Live Evidence Collector`
 
+Exchange AdapterはExecutionRecordを生成するが、ProductionEvidenceのSemantic Generatorではない。
+
 ## Custodian
 
 `ROLE-LOG-001: Logger`
+
+## Analyzer / Consumer
+
+`ROLE-ANL-001: Post-Trade Analysis` / Research / Knowledge Domain
+
+Post-TradeはProductionEvidenceを分析するが、元Evidenceを生成・改変しない。
 
 ## Main Fields
 
@@ -2248,6 +3003,33 @@ created_at:
 trace_id:
 ```
 
+## FIX-009 Generation Boundary
+
+```text
+ExecutionRecord
++ EntryThesis / TradeThesis
++ Live Market / Fee / Funding / Liquidity context
+↓
+Live Evidence Collector
+↓
+ProductionEvidence
+↓
+Logger / Immutable Storage
+↓
+Post-Trade Analysis
+```
+
+## Invariants
+
+- `ExecutionRecord != ProductionEvidence`
+- `evidence_source_channel = LIVE` を保持し、Historical / Demo Evidenceへ無言で混ぜない
+- LoggerはProductionEvidenceを保存するだけでSemantic生成しない
+- Post-TradeはProductionEvidenceを分析するだけで元Evidenceを再生成・改変しない
+- Live Evidenceの一部が取得不能でも取引事実を削除しない
+- 不完全時は`evidence_completeness / quality_ref / diagnostics_ref`でDEGRADED / INCOMPLETE相当を表現し、推測値で補完しない
+- Actual Slippage / Fee / Funding等とDemo / Historical推定値を別Channelとして比較可能にする
+- `evidence_builder_version`を保存し、後から抽出Logicを再現可能にする
+
 ---
 
 # OBJ-PRD-014: TradeResult
@@ -2264,7 +3046,7 @@ Logger / Post-Trade
 
 ```yaml
 trade_id:
-trial_id:
+trial_id:                  # Demo / Researchなら使用
 experiment_mode:
 evidence_source_channel:
 entry_thesis_ref:
@@ -2284,6 +3066,10 @@ market_event_refs: []
 quality_ref:
 ```
 
+## Invariants
+
+Trade Result = Hypothesis Resultではない。
+
 ---
 
 # I. POST-TRADE / FEEDBACK OBJECTS
@@ -2297,6 +3083,17 @@ Trade ResultをWIN / LOSSだけでなく、期待値・Horizon・MAE/MFE・Oppor
 ## Owner
 
 Post-Trade Analysis
+
+## Candidate Classification
+
+```text
+EXPECTED_SUCCESS
+UNEXPECTED_SUCCESS
+EXPECTED_FAILURE
+UNEXPECTED_FAILURE
+MISSED_OPPORTUNITY
+SYSTEM_FAILURE
+```
 
 ## Main Fields
 
@@ -2369,6 +3166,10 @@ dependency_issue:
 contribution_assessment:
 research_candidate_refs: []
 ```
+
+## Invariants
+
+TradeがLossでもHypothesisを自動Retireしない。
 
 ---
 
@@ -2450,6 +3251,10 @@ model_error_candidates: []
 research_candidate_ref:
 ```
 
+## Invariants
+
+Live Failureだけで即HypothesisをRetireせず、Execution / Market / Demo Model差を分解する。
+
 ---
 
 # OBJ-POST-007: CounterfactualResult
@@ -2474,6 +3279,10 @@ simulated_outcome:
 uncertainty:
 limitations: []
 ```
+
+## Invariants
+
+反実仮想を実測Evidenceと同等に扱わない。
 
 ---
 
@@ -2500,6 +3309,10 @@ created_research_candidate_ref:
 created_at:
 ```
 
+## Invariants
+
+直接Trainerへ流さず、原因に応じたResearchへ戻す。
+
 ---
 
 # J. PLATFORM / OPERATIONS OBJECTS
@@ -2513,6 +3326,19 @@ Runtime / Market Instance /主要Subsystemの現在状態を表すOperational Ob
 ## Owner
 
 Runtime / Monitoring
+
+## Candidate Runtime States
+
+```text
+BOOTING
+RUNNING
+PAUSED
+DEGRADED
+ERROR
+RECOVERY
+STOPPING
+STOPPED
+```
 
 ## Main Fields
 
@@ -2558,6 +3384,10 @@ recovery_state:
 stack_or_diagnostic_ref:
 ```
 
+## Invariants
+
+同じErrorを無限Retryしない。Retry PolicyはFailure Governanceで定義する。
+
 ---
 
 # OBJ-OPS-003: Incident
@@ -2587,6 +3417,10 @@ recovery_action_refs: []
 postmortem_ref:
 ```
 
+## Invariants
+
+市場Data障害がどのActive Positionへ影響するかForward Impact Trace可能にする。
+
 ---
 
 # OBJ-OPS-004: ResourceSnapshot
@@ -2614,6 +3448,10 @@ process_count:
 research_resource_usage:
 threshold_state:
 ```
+
+## Invariants
+
+監視だけで終わらせず、Resource Budget / Retention / DEGRADED条件へ接続できる。
 
 ---
 
@@ -2643,6 +3481,10 @@ postcondition:
 operator_or_automation:
 ```
 
+## Invariants
+
+Restart無限Loopを許可しない。
+
 ---
 
 # OBJ-OPS-006: MigrationRecord
@@ -2671,6 +3513,10 @@ validation_result:
 rollback_plan_ref:
 ```
 
+## Invariants
+
+古いKnowledgeを新Schemaへ移行した際、出所・元Versionを失わない。
+
 ---
 
 # OBJ-OPS-007: BackupRecord
@@ -2698,6 +3544,10 @@ restore_test_result:
 retention_class:
 ```
 
+## Invariants
+
+Backupが存在するだけで安全とみなさず、Restore Testを追跡する。
+
 ---
 
 # OBJ-OPS-008: AuditEvent
@@ -2724,6 +3574,12 @@ created_at:
 authorization_ref:
 ```
 
+## Invariants
+
+重要変更を「誰が・なぜ」行ったか追跡可能にする。
+
+`AuditEvent` はStateが実際に変更された事実そのものではない。成功State遷移の履歴は`StateTransitionEvent`を正本とする。
+
 ---
 
 # 7. Evidence Source Channel共通定義
@@ -2744,24 +3600,59 @@ STRESS
 LIVE
 ```
 
+原則:
+
+```text
+Historical Evidence
+≠ Demo Forward Evidence
+≠ Live Production Evidence
+```
+
+EvidencePackageで束ねることはできるが、元Channelを消して統合しない。
+
+ProductionEvidenceは必ず`LIVE` Channelの出所を保持する。
+
 ---
 
 # 8. SnapshotとCurrent Stateの区別
 
-同じ概念でも、現在値と過去Snapshot / 履歴を区別する。
-
-FIX-012ではさらに、同一Knowledgeの現在状態を一つの`status`へ圧縮しない。
+同じ概念でも、現在値と過去Snapshot /履歴を区別する。
 
 例:
 
 ```text
-CausalHypothesis Lifecycle = APPROVED
-Knowledge Aging / Health = AGING
-Production Promotion = LIMITED_LIVE
-Risk State = CAUTION
+Current MarketDNA
+= 現在参照している市場状態
+
+MarketDNA Snapshot
+= 過去Case / Trade時点で固定されたDNA
 ```
 
-各軸は別参照・別StateTransitionEventを持つ。
+```text
+Current Hypothesis State
+= 現時点の高速参照用Projection
+
+StateTransitionEvent
+= Stateが実際にどう変わったかを保存するImmutable履歴
+
+EntryThesis
+= 実際にOrderIntentを作る直前に固定したTradeThesis / Hypothesis Set / Market / Risk / VersionのSnapshot
+```
+
+FIX-012では同一Knowledgeについて:
+
+```text
+Lifecycle
+Knowledge Aging / Health
+Production Promotion
+Risk State
+```
+
+を一つのCurrent `status`へ圧縮しない。
+
+ApplicableHypothesisSet / TradeThesis / EntryThesisはそれぞれ生成時点の情報を固定し、後から現在Knowledgeが変わっても過去Production判断を無言で書き換えない。
+
+StateについてもCurrent Stateだけを上書きしてTransition Historyを失わない。
 
 ---
 
@@ -2769,48 +3660,141 @@ Risk State = CAUTION
 
 同じ情報を複数Objectへ全文コピーするより、ID参照を基本とする。
 
-State軸もLifecycle / Knowledge Aging / Production Promotion / Riskをコピー統合せず、正式Owner Object / Projectionへの参照を利用する。
+例:
+
+```text
+OrderIntent
+→ EntryThesis
+→ TradeThesis
+→ ApplicableHypothesisSet
+→ HypothesisPoolEntry
+→ target_knowledge_ref
+→ evidence_id
+→ feature_id / market_event_id
+→ raw_data_id
+```
+
+State MachineではCurrent Projectionから`latest_transition_event_ref`等を参照可能にし、StateTransitionEvent側は`target_object_ref / previous_transition_event_ref / trigger_refs`から履歴を追跡できるようにする。
+
+ただし、EntryThesis等の監査・再現に重要なSnapshotでは、必要最小限のValueを同時固定してよい。
+
+この境界はData Contract / DB Schemaで確定する。
 
 ---
 
 # 10. Provenance Chain
 
-主要判断ObjectはRaw / Evidenceまで逆引き可能にする。
-
-FIX-012以降、Production判断では少なくとも次も追跡可能にする。
+主要判断Objectは最低限次の経路を逆引きできることを目標とする。
 
 ```text
-HypothesisPoolEntry
-├→ target lifecycle state
-├→ KnowledgeLifecycleProfile
-├→ Production Promotion Stage
-└→ Applicability / Constraint
-
-Defense / EntryThesis
-└→ RiskState
+TradeResult
+↓
+ProductionEvidence / ExecutionRecord
+↓
+OrderIntent
+↓
+EntryThesis
+↓
+DefenseDecision
+↓
+SignalDecision
+↓
+TradeThesis
+↓
+ApplicableHypothesisSet
+↓
+HypothesisPoolEntry / CausalHypothesis / Edge
+↓
+ApplicabilityProfile / Evidence / Constraint
+↓
+MarketContext / MarketDNA
+↓
+MarketEvent / Feature
+↓
+Event Detection Rule / FormulaDefinition / MeasurementResult
+↓
+Observation / TimeSeriesMeasurement
+↓
+RawData
+↓
+SourceMetadata
 ```
+
+ProductionEvidence自体も`ExecutionRecord + EntryThesis + Live Context`まで逆引き可能にする。
+
+FIX-012ではHypothesisPoolEntryから:
+
+```text
+target lifecycle state
+knowledge lifecycle
+production stage
+```
+
+を別々に逆引きでき、Risk StateはDefense / EntryThesis側から別参照する。
+
+Stateについては:
+
+```text
+Current State
+↓
+latest StateTransitionEvent
+↓
+previous StateTransitionEvent
+↓
+Trigger / Evidence / Decision / Error / Authority provenance
+```
+
+を追跡可能にする。
 
 ---
 
 # 11. Forward Impact Chain
 
-Knowledge Aging / Health低下が発生した場合、研究成熟度を無言で書き換えるのではなく:
+長期運用では逆引きだけでなく、上流障害が下流へ何を壊すか追跡する。
 
 ```text
-Knowledge Aging CURRENT → DEGRADED
+Source Failure
+↓
+Affected Observation
+↓
+Affected Feature / Event Detection
+↓
+Affected MarketEvent / Evidence
+↓
+Affected Hypothesis / Applicability
+↓
+Affected ApplicableHypothesisSet
+↓
+Affected TradeThesis
+↓
+Affected EntryThesis candidate
+↓
+Affected Order / Active Position
+```
+
+FIX-012ではKnowledge health低下時に、研究成熟度を直接書き換えず:
+
+```text
+Knowledge Aging / Health Transition
 ↓
 Production Promotion再評価
 ↓
-必要なら LIMITED_LIVE → PAUSED
+必要ならProduction PAUSED
 ↓
 ResearchCandidate / Revalidation
 ```
 
-のように別Transitionとして追跡する。
+として別々にTraceする。
+
+Entry後はEntryThesisを書き換えず、影響はCurrent State / Supervisor / Defense / Incidentで扱う。
+
+重要なCurrent State変更はStateTransitionEventに残し、後からForward Impactの因果順序を追跡可能にする。
 
 ---
 
 # 12. Objectを勝手に統合しない組み合わせ
+
+以下は意味が異なるため、安易に一Objectへ統合しない。
 
 ```text
 Observation ≠ MarketEvent
@@ -2841,10 +3825,44 @@ Knowledge Aging / Health ≠ Production Promotion Stage
 Production Promotion Stage ≠ Risk State
 PositionThesisState ≠ ExitDecision
 TradeResult ≠ TradeThesisEvaluation
+TradeResult ≠ HypothesisAttribution
 ErrorEvent ≠ Failure Knowledge
 ```
 
-FIX-012最重要原則:
+特にFIX-008では次を固定する。
+
+```text
+Approved Knowledge
+≠ ApplicableHypothesisSet
+≠ TradeThesis
+≠ SignalDecision
+```
+
+FIX-009では次を固定する。
+
+```text
+Generator
+≠ Custodian
+≠ Analyzer
+```
+
+FIX-010では次を固定する。
+
+```text
+Current State
+≠ StateTransitionEvent
+≠ AuditEvent
+```
+
+FIX-011では次を固定する。
+
+```text
+ResearchPlan Version
+≠ ResearchPlan Lifecycle State
+≠ ResearchPlan Lock State
+```
+
+FIX-012では次を固定する。
 
 ```text
 Research maturity
@@ -2857,35 +3875,101 @@ Research maturity
 
 # 13. ObjectをTop-Level Layerへ昇格させない原則
 
-State軸の分離を理由に新しいTop-Level Layerを増やさない。
+以下は重要Objectだが、それだけを理由に独立巨大Layerへしない。
 
-`KnowledgeLifecycleProfile`、`HypothesisPoolEntry`、`RiskState`は独立Semantic Object / Projectionだが、State軸そのものを巨大Layerへしない。
+```text
+MarketDNA
+ApplicableHypothesisSet
+TradeThesis
+EntryThesis
+ProductionEvidence
+StateTransitionEvent
+EvidencePackage
+FailureBoundary
+Constraint
+ResearchCandidate
+RiskState
+```
+
+Role Dictionaryに独立責任主体が定義されている場合のみRole / Module化を検討する。
+
+ApplicableHypothesisSetとTradeThesisはFIX-008で`Production Thesis Builder`が生成するが、両Objectを別々のTop-Level Layerへ昇格させない。
+
+EntryThesis / ProductionEvidenceの生成処理はFIX-009でExecution Domain内部Submoduleへ割り当てるが、Object自体を新Top-Level Layerへ昇格させない。
+
+StateTransitionEventはFIX-010でOS横断Objectとして正式化するが、`State Transition Layer`のような新Top-Level Layerは作らない。
+
+ResearchPlanのLifecycle / LockはFIX-011で二つのState Machineとして扱うが、各Stateを別Object / 別Top-Level Layerへ昇格させない。
+
+FIX-012では4軸分離を理由に`EdgeHealthObject`等の重複Object / Layerを増やさず、既存Objectの責任境界で解決する。
 
 ---
 
 # 14. Object追加Gate
 
-FIX-012では新Objectを増やさず、既存Objectの責任分離で解決する。
+新Objectを追加する前に次を確認する。
+
+```text
+1. 既存ObjectのField追加で表現できないか
+2. 単なるViewではないか
+3. 単なるStateではないか
+4. 単なるContractではないか
+5. 別Objectとして独立ID / Lifecycle / Versionが必要か
+6. 監査・再現・研究上、独立保存する価値があるか
+7. 既存Objectとの重複率は高くないか
+8. 何十年保存する意味があるか
+```
+
+独立ID / Lifecycle / Version / Ownerが不要なら、新Objectを増やさない。
+
+FIX-010のStateTransitionEventは、異なるState Machineを横断して独立ID・時系列・Version・Authority provenance・Replay価値を持つため、独立Persistent Objectとして正式化する。
+
+FIX-011ではResearchPlan Lifecycle / Lockのために新しいState Objectを増やさず、既存ResearchPlan + StateTransitionEventで表現する。
+
+FIX-012でも新Objectを追加せず、CausalHypothesis / Edge / KnowledgeLifecycleProfile / HypothesisPoolEntryの責任を分離する。
 
 ---
 
 # 15. Object変更ルール
 
-Objectの意味・必須Field・Lifecycle・Ownerを変更する場合、`DESIGN_CHANGE_RULES.md` に従う。
+Objectの意味・必須Field・Lifecycle・Ownerを変更する場合:
 
-FIX-012のField rename / State migrationは旧履歴を破壊せず、Migration Mappingを保持する。
+1. `DESIGN_CHANGE_RULES.md` に従う
+2. 既存Objectとの互換性を確認する
+3. Schema Migration要否を確認する
+4. 過去Objectを読み込めるか確認する
+5. Trace / Provenanceが切れないか確認する
+6. Production Snapshot再現性を確認する
+7. Migration / Rollback Planを作る
+
+単なるPython class変更だけでSemantic Object定義を勝手に変えない。
+
+FIX-012では旧`status` / Field名 / State履歴を無言で書き換えず、Migration Mappingを保持する。
 
 ---
 
 # 16. Object LifecycleとSTATE_DICTIONARYの関係
 
-Stateの正式語彙・遷移は:
+本書はObjectの意味を定義する。
+
+Stateの正式語彙・遷移は後続の:
 
 ```text
 01_DICTIONARY/STATE_DICTIONARY.md
 ```
 
 をSingle Source of Truth候補とする。
+
+FIX-010以降、成功したState変更履歴の共通Semantic Objectは`OBJ-STATE-001: StateTransitionEvent`を使用する。
+
+各State Machine専用の重複History Objectを無秩序に増やさない。
+
+FIX-011ではResearchPlanが同時に二つのState Machineを持つことをObject側へ正式接続する。
+
+```text
+STATE-RSCH-002   = ResearchPlan Lifecycle
+STATE-RSCH-002-L = ResearchPlan Lock State
+```
 
 FIX-012では:
 
@@ -2903,49 +3987,147 @@ STATE-RISK-001 = Current OS Risk State
 
 # 17. ObjectとDATA_CONTRACTの関係
 
-後続 `DATA_CONTRACT.md` ではFIX-012について次を固定する。
+本書:
 
 ```text
-CausalHypothesis lifecycle state required / nullable
-Edge lifecycle state required / nullable
+Object = 何の情報か
+```
+
+後続 `DATA_CONTRACT.md`:
+
+```text
+誰が
+どのObjectを
+どの条件で
+どのVersionで
+誰へ渡すか
+```
+
+を定義する。
+
+Object Dictionary内へRole間通信規則を過剰に埋め込まない。
+
+FIX-008で決めた`THESIS_NOT_BUILDABLE`の具体的なResult表現、Required / Nullable、Build失敗時の受け渡し、Builder Version型、Set / ThesisのCardinalityはData / Processing Contractで固定する。
+
+FIX-009で決めた次もData / Processing Contractで固定する。
+
+```text
+EntryThesis required references / nullability
+ENTRY_SNAPSHOT_NOT_BUILDABLEのResult表現
+EntryThesis → OrderIntent hard gate
+entry_snapshot_atとOrderIntent.created_at / ExecutionRecord.submitted_atの時系列制約
+ProductionEvidence completeness / quality表現
+ExecutionRecord → ProductionEvidence cardinality
+LIVE Channel固定
+Logger Custody Contract
+Post-Trade Read-only Consumer Contract
+```
+
+FIX-010で決めた次もData / Processing Contractで固定する。
+
+```text
+StateTransitionEvent required / nullable fields
+state_machine_type namespace / enum
+transition_sequence uniqueness scope
+expected_previous_state compare-and-set rule
+successful applyとEvent persistのatomicity
+Current Projection update ordering
+latest_transition_event_ref
+Replay / rebuild rule
+StateTransitionEvent retention
+AuditEventとの関連Cardinality
+Manual Override authorization reference
+```
+
+FIX-011で決めた次もResearch / Data / Processing Contractで固定する。
+
+```text
+ResearchPlan lifecycle_state / lock_state required / nullable rule
+Lifecycle / Lock state_machine_type namespace
+Lifecycle / Lock transition atomicity and latest reference consistency
+ResearchPlan Version identity / supersedes cardinality
+FROZEN後のMeaningful Change判定
+ResearchTrial → exact ResearchPlan Version binding
+plan_lock_state_at_start / plan_lifecycle_state_at_start snapshot rule
+DEMO_FORWARD / protected holdout開始時のFROZEN hard gate
+Plan Version変更時のnew T0 requirement
+旧Trialを新Plan Versionへ再帰属させない制約
+```
+
+FIX-012で決めた次もData / Processing / Production Contractで固定する。
+
+```text
+CausalHypothesis / Edge lifecycle state required / nullable rule
 KnowledgeLifecycleProfile cardinality
-HypothesisPoolEntry target_knowledge_ref type
+target_knowledge_ref / target_lifecycle_state_ref type
 Lifecycle / Knowledge Aging / Production Promotion参照整合性
-Production Thesis Builder Gate順序
+Production Thesis BuilderのGate順序
 AGING / STALE / DEGRADED時のProduction制限Policy
 Production PAUSEDの復帰条件
 RiskStateとの最終Gate arbitration
-StateTransitionEvent namespace / atomicity
-旧Field migration
+旧Field / 旧State migration
 ```
 
 ---
 
 # 18. ObjectとDATABASE_SCHEMAの関係
 
-FIX-012では次を一つの`status` Columnへ圧縮しない。
+本書のObjectとDB Tableを1:1固定しない。
+
+例:
 
 ```text
-Hypothesis / Edge Lifecycle
-Knowledge Aging / Health
-Production Promotion Stage
-Risk State
+Logical Object
+CausalHypothesis
+
+Physical Storage
+hypotheses table
+hypothesis_versions table
+evidence_links table
 ```
 
-物理Table構造は `DATABASE_SCHEMA.md` で確定する。
+のように分割される可能性がある。
+
+StateTransitionEventもSemantic Objectとしては1つだが、DBではCurrent Projection TableとTransition History Tableへ分かれる可能性がある。
+
+ResearchPlanもLogical Objectとしては1つだが、Plan Version / Current Lifecycle / Current Lock / Transition Historyを物理的にどう保存するかはDB Schemaで決める。
+
+FIX-012ではHypothesis / Edge Lifecycle、Knowledge Aging / Health、Production Promotion、Risk Stateを一つの`status` Columnへ圧縮しない。
+
+DB Schemaは後からStorage効率・Query・Migrationを考えて決める。
+
+重要:
+
+> Semantic ObjectがDB都合で壊れないこと。
 
 ---
 
 # 19. ObjectとPython Modelの関係
 
-新規Python実装で次のような万能条件を使わない。
+本書のObjectとPython classを1:1永久固定しない。
+
+実装時には例として:
+
+```text
+Pydantic Model
+Dataclass
+ORM Model
+TypedDict
+Event Schema
+```
+
+等へ落とせる。
+
+ただしコード側の命名と意味は本辞書へ従う。
+
+FIX-012以降、次のような万能Status判定を新規実装しない。
 
 ```python
 if hypothesis.status == "ACTIVE":
     trade()
 ```
 
-概念的には:
+Production判定は概念上:
 
 ```text
 Lifecycle
@@ -2962,15 +4144,54 @@ AND Risk State
 
 # 20. Storage Lifecycle区分
 
-重要Hypothesis / Edge / KnowledgeLifecycleProfile / HypothesisPoolEntry / StateTransitionEventは過去判断再現のため長期保存候補。
+Objectごとに将来Retention Classを付与する。
 
-旧FIX-012以前StateもMigration前の意味を保持して保存する。
+候補:
+
+```text
+HOT
+WARM
+COLD
+ARCHIVE
+EPHEMERAL
+IMMUTABLE_LONG_TERM
+```
+
+例:
+
+```text
+Recent Observation
+→ HOT / WARM
+
+Old compressed Raw
+→ COLD / ARCHIVE
+
+Cache
+→ EPHEMERAL
+
+Important Hypothesis / Failure / Trade / Knowledge
+→ IMMUTABLE_LONG_TERM候補
+```
+
+EntryThesis / ProductionEvidence / ExecutionRecord / TradeResult / StateTransitionEventは監査・研究・再構築価値が高いため長期Immutable保存候補。
+
+FROZEN / SUPERSEDED ResearchPlan Versionと、それに紐づくResearchTrialも研究再現性のため長期保存候補。
+
+FIX-012以前の旧State / Fieldを持つHypothesis / Edge / Pool EntryもMigration監査のため読取可能性を維持する。
+
+具体的保存期間は `STORAGE.md` / Long-Term Governanceで決める。
 
 ---
 
 # 21. Knowledge Aging共通原則
 
-FIX-012以降、Knowledge Aging / Healthの正本候補は`KnowledgeLifecycleProfile.knowledge_aging_state`。
+FIX-012以降、Knowledge Aging / Healthの正本候補は:
+
+```text
+KnowledgeLifecycleProfile.knowledge_aging_state
+```
+
+正式候補:
 
 ```text
 FRESH
@@ -2983,15 +4204,49 @@ ARCHIVED
 
 古い = 無効ではない。
 
-劣化 = 研究Approvalを自動取消、でもない。
+`DEGRADED` = 研究上のApproval自動取消、でもない。
 
-Production制限が必要なら別のProduction Promotion Transitionとして実施する。
+ただし:
+
+> 長期間再検証されていない = 不確実性が増えている可能性
+
+として扱う。
+
+Production Thesis BuilderはKnowledge Aging / Healthを無視してApplicableHypothesisSetへ採用しない。
+
+Production利用停止が必要なら、Knowledge Aging / Healthを`SUSPENDED`へ変えるのではなく、別のProduction Promotion Transitionとして`PAUSED`等を適用する。
 
 ---
 
 # 22. Object Definition of Done
 
-重要Objectでは、Lifecycle / Aging / Production / Riskのどの軸を持つかを明示し、他軸の責任をコピーしないことを確認する。
+一つの重要Objectを完全設計済みとみなす最低条件:
+
+```text
+□ Object ID / Name
+□ Meaning
+□ Category
+□ Owner Role
+□ Generator
+□ Primary Inputs / Parent Objects
+□ Main Fields
+□ ID rule
+□ Version rule
+□ Lifecycle / State relation
+□ 他State軸との責任境界
+□ Trace / Provenance
+□ Quality / Uncertainty relation
+□ Mutability
+□ Retention class候補
+□ Security / Privacy consideration
+□ Invariants
+□ Prohibitions
+□ Downstream users
+□ Migration consideration
+□ Failure / invalid object handling
+```
+
+本辞書はSemantic Levelの完全設計候補であり、各Objectの型・nullability・enum・index等はData Contract / DB Schemaでさらに固定する。
 
 ---
 
@@ -3022,6 +4277,8 @@ Observation
 MarketEvent
 TimeSeriesMeasurement
 ```
+
+`NormalizedObservation` はFIX-001で `Observation` へ統合済み。旧 `OBJ-DATA-004` は履歴用Tombstoneとしてのみ保持する。
 
 ## Measurement / Feature
 
@@ -3129,6 +4386,8 @@ AuditEvent
 
 # 24. 現時点で意図的にObject化しないもの
 
+以下は現段階では独立Persistent Objectとして確定しない。
+
 ```text
 Case Library
 Market Memory
@@ -3145,24 +4404,54 @@ ResearchPlanLockObject
 EdgeHealthObject
 ```
 
-FIX-012では`EdgeHealthObject`のような新Objectを作らず、Edge maturityはEdge Lifecycle、現在のKnowledge healthはKnowledgeLifecycleProfileで表す。
+理由:
+
+- Case Library / Market Memory / Failure Museum / Knowledge Graph = Knowledge DomainのView
+- `THESIS_NOT_BUILDABLE` = FIX-008時点ではTradeThesisとは別Objectを新設せず、BuilderのDiagnostics / Processing Contract上の非成立結果として扱う
+- `ENTRY_SNAPSHOT_NOT_BUILDABLE` = FIX-009時点ではEntryThesisとは別Objectを新設せず、Entry Snapshot BuilderのDiagnostics / Processing Contract上のHard Gate非成立結果として扱う
+- `StateTransitionAttempt` = FIX-010では拒否・失敗Attempt専用Objectを増やさずAuditEvent / Diagnostics等で扱う
+- 個別State History名 = 共通`StateTransitionEvent`を`state_machine_type`で利用し、履歴Objectを乱立させない
+- ResearchPlan Lifecycle / Lock = FIX-011では新Objectを作らず、ResearchPlanの独立State Machineとして表現する
+- `EdgeHealthObject` = FIX-012では新設せず、Edge maturityはEdge Lifecycle、現在のKnowledge healthはKnowledgeLifecycleProfileで表す
+
+また:
+
+```text
+RANDOM_BASELINE
+HISTORICAL
+REPLAY
+PAPER
+DEMO_FORWARD
+SHADOW
+COUNTERFACTUAL
+```
+
+はExperiment Modeであり、Objectではない。
+
+`DemoForwardTrial` を別Objectとして乱立させず、基本は `ResearchTrial + experiment_mode = DEMO_FORWARD` として表現する。
 
 ---
 
 # 25. 未確定・次文書へ送る論点
 
+以下は本辞書で名前と意味を整理するが、最終仕様は後続文書で確定する。
+
 1. 正式State一覧 → `STATE_DICTIONARY.md`
-2. Market DNAとRegimeの正式依存関係
-3. Feature Priority Cycle Contract
-4. MarketEvent Detection Contract
-5. ApplicableHypothesisSet / TradeThesis Contract
-6. EntryThesis / ProductionEvidence Contract
-7. StateTransitionEvent Atomicity / Authority
-8. ResearchPlan Lifecycle / Lock Contract
-9. **FIX-012のLifecycle / Knowledge Aging / Production Promotion / Risk State Gate順序・Cardinality・Migration・Policyは `DATA_CONTRACT.md` / Production Contract / Authority Matrixで固定する**
-10. Soft / Hard ContradictionのProduction Gate
-11. Risk State閾値
-12. Retention / Encryption / Schema Migration
+2. Market DNAとRegimeの正式依存関係 → Architecture / State設計
+3. **Feature Priorityが参照するDNAの時系列原則はFIX-006で確定済み。Field型・Required/Nullable・Cycle境界Validationは `DATA_CONTRACT.md` / Data Flowで固定する**
+4. **MarketEventのCanonical生成責任はFIX-007でEvent Detection Processorへ確定済み。Event Field型・Detection Rule参照型・Dedup/Cardinality・Detector HealthのContractは `DATA_CONTRACT.md` / Data Flowで固定する**
+5. **ApplicableHypothesisSet / TradeThesisのCanonical生成責任はFIX-008でProduction Thesis Builderへ確定済み。Builder Input Contract、Selection Cardinality、Builder Version型、`THESIS_NOT_BUILDABLE`表現、Set→Thesis→Signal受け渡しは `DATA_CONTRACT.md` / Processing / Trade Thesis Contractで固定する**
+6. **EntryThesis / ProductionEvidence生成責任はFIX-009で確定済み。Entry Snapshot hard gate、OrderIntent必須参照、時系列制約、Live Evidence completeness、ExecutionRecordとのCardinality、Logger Custody / Post-Trade read-only境界は `DATA_CONTRACT.md` / Processing Contractで固定する**
+7. **成功State変更履歴はFIX-010で`StateTransitionEvent`へ正式化済み。Authority最終割当、Atomic Write、Sequence uniqueness、CAS、Replay、Retention、AuditEvent関連は `AUTHORITY MATRIX` / `DATA_CONTRACT.md` / Processing / DB Schemaで固定する**
+8. **ResearchPlanはFIX-011でLifecycle State / Lock Stateの2軸へObject側も正式追従済み。Stateの正式語彙は`STATE_DICTIONARY.md`、Trial開始時FROZEN Gate・Plan Version binding・new T0・supersedes関係の型/CardinalityはResearch / Data / Processing Contractで固定する**
+9. **FIX-012でHypothesis / Edge Lifecycle・Knowledge Aging / Health・Production Promotion Stage・Risk Stateを完全分離。Gate順序、AGING / STALE / DEGRADED時のProduction Policy、PAUSED復帰条件、Cardinality、旧Field / State Migrationは `DATA_CONTRACT.md` / Production Contract / Authority Matrixで固定する**
+10. Soft / Hard ContradictionのProduction Gate → Production Contract
+11. Risk Stateの閾値 → Risk Design / Research
+12. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
+13. Object間Cardinality → `DATA_CONTRACT.md` / `DATABASE_SCHEMA.md`
+14. Retention期間 → Storage Governance
+15. Encryption / Secret分類 → Security Design
+16. Schema Migration実装 → Version / Migration Design
 
 ---
 
@@ -3179,10 +4468,24 @@ FIX-012では`EdgeHealthObject`のような新Objectを作らず、Edge maturity
 > **StateはLifecycleを表す。**
 >
 > **Knowledgeは長期に残る。**
+>
+> **Codeはこれらを実装する手段であり、意味の正本ではない。**
+
+FIX-009ではさらに:
+
+> **GeneratorはObjectを作る。Custodianは改変せず保存する。Analyzerは後から意味を分析する。**
+
+FIX-010ではさらに:
+
+> **Current Stateは現在値のProjectionであり、StateTransitionEventは実際に適用された遷移のImmutable Historical Factである。**
+
+FIX-011ではさらに:
+
+> **ResearchPlan Version・Lifecycle State・Lock Stateは別軸であり、ResearchTrialは実行時に使用したPlan VersionとLock条件を固定参照する。**
 
 FIX-012ではさらに:
 
-> **研究成熟度・Knowledgeの鮮度/健全性・Production利用許可・現在OSのRisk許可を一つのstatusへ統合しない。**
+> **Hypothesis / Edgeの研究成熟度・Knowledgeの鮮度/健全性・Production利用許可・現在OSのRisk許可を一つのstatusへ統合しない。**
 
 ```text
 Hypothesis / Edge Lifecycle
@@ -3191,4 +4494,4 @@ Hypothesis / Edge Lifecycle
 ≠ Risk State
 ```
 
-Python・DB・Exchange・AI Providerが変わっても、この意味境界を失わない設計を優先する。
+何十年以上運用するため、Python・DB・Exchange・AI Providerが変わっても、Objectの意味・Version・Provenance・Research履歴・Trade判断履歴・State Transition履歴を失わない設計を優先する。
