@@ -73,9 +73,27 @@ THESIS_WEAKENING
 BUY / SELL / NO_TRADE
 ALLOW / REDUCE / BLOCK
 TRADE / WAIT / REJECT
+APPROVE / REJECT / HOLD
 ```
 
 DecisionはStateではない。
+
+FIX-015以降、State TransitionのGovernance判断は正式な`ApprovalDecision` Objectとして保存できる。
+
+```text
+ApprovalDecision
+= TransitionをApplyしてよい / 拒否する / 保留するというImmutable Decision
+
+StateTransitionEvent
+= Transitionが実際にApplyされたというImmutable Historical Fact
+```
+
+したがって:
+
+```text
+APPROVE
+≠ APPLIED
+```
 
 ## Evidence Strength / Assessment
 
@@ -128,6 +146,19 @@ Stateそのものではなく、State Machineで実際に成功・適用され�
 ```text
 01_DICTIONARY/OBJECT_DICTIONARY.md
 OBJ-STATE-001: StateTransitionEvent
+```
+
+を参照する。
+
+## ApprovalDecision
+
+Stateそのものではなく、特定Target / Version / State Machine / TransitionについてApprove Authorityが下した一回のImmutable Governance Decision。
+
+正式Object定義は:
+
+```text
+01_DICTIONARY/OBJECT_DICTIONARY.md
+OBJ-GOV-001: ApprovalDecision
 ```
 
 を参照する。
@@ -205,6 +236,7 @@ State履歴は、将来次を説明できること。
 誰がRequestした？
 誰 / どのRoleがRecommendした？
 誰 / どのRoleがApproveした？
+どのApprovalDecisionが使われた？
 誰 / どのRoleが実際にApplyした？
 どのState Machine Versionだった？
 Manual Overrideだった？
@@ -281,7 +313,9 @@ Rejected / Failed Transition Attempt
 ≠ StateTransitionEvent
 ```
 
-拒否・失敗はAuditEvent / Diagnostics / ApprovalDecision候補で追跡する。
+拒否・失敗はAuditEvent / Diagnostics / ApprovalDecisionで追跡可能にする。
+
+`ApprovalDecision = REJECT / HOLD` はState変更ではないため、それだけではStateTransitionEventを生成しない。
 
 ## RULE-STATE-008: StateTransitionEventはImmutable
 
@@ -389,6 +423,39 @@ Retrieval Result
 ```
 
 一回の失敗・成功を、StateTransitionEventなしにCurrent Source State変更として扱わない。
+
+## RULE-STATE-015: ApprovalDecisionをState変更前の正式Decisionとして分離する
+
+FIX-015以降、Approve Authorityの判断を曖昧なFlag / Log / `authorized=true`へ潰さず、正式な`ApprovalDecision`として保存可能にする。
+
+```text
+Recommendation
+≠ ApprovalDecision
+≠ StateTransitionEvent
+≠ AuditEvent
+```
+
+正式原則:
+
+```text
+APPROVE
+≠ APPLIED
+```
+
+`ApprovalDecision = APPROVE`であっても、Apply直前にTarget / Version / State Machine / From / To / Scope / Expiry / Supersession / Current State / Transition Rule等が不整合ならApplyを拒否する。
+
+原則:
+
+```text
+1 Authority
+= 1 ApprovalDecision
+
+1 ApprovalDecision
+= 原則1 Transition Authorization
+
+Multi-Approval
+= 複数ApprovalDecisionで表現
+```
 
 ---
 
@@ -1655,7 +1722,7 @@ Provider retirement notice
 
 一つのSourceMetadataがLifecycle変更材料になることはあるが、SourceMetadata自体をStateTransitionEventとみなさない。
 
-## FIX-013 Authority Flow
+## FIX-013 / FIX-015 Authority Flow
 
 ```text
 Source Adapter / Collector / Monitoring
@@ -1665,7 +1732,7 @@ Source Lifecycle Governance
 → RECOMMEND
 ↓
 Source Lifecycle Governance
-→ APPROVE
+→ ApprovalDecision
 ↓
 Source Lifecycle Controller
 → APPLY
@@ -1888,11 +1955,13 @@ Hypothesis = DEMO_FORWARD
 
 ---
 
-# 13. FIX-013 State Authority Matrix
+# 13. FIX-013 / FIX-015 State Authority Matrix
 
 Stateは誰でも自由に書き換えられるものではない。
 
-FIX-013では、State変更のAuthorityを次の4責任へ正式分離する。
+FIX-013では、State変更のAuthorityを次の4責任へ正式分離した。
+
+FIX-015では、APPROVE責任が下した一回の判断を正式な`ApprovalDecision` Objectとして保存する。
 
 ```text
 REQUEST
@@ -1900,6 +1969,8 @@ REQUEST
 RECOMMEND
 ↓
 APPROVE
+↓
+ApprovalDecision
 ↓
 APPLY
 ↓
@@ -1916,10 +1987,10 @@ RECOMMEND
 = Evidence / Validation / Domain専門判断に基づき、Transitionを推奨する。Current Stateは変更しない。
 
 APPROVE
-= Governance / Policy上、そのTransitionを実施してよいと許可する。Current Stateへ直接書き込まない。
+= Governance / Policy上、そのTransitionを実施してよいか判断し、ApprovalDecisionを生成する。Current Stateへ直接書き込まない。
 
 APPLY
-= Current State / expected_previous_state / Transition Rule / Authority / Approvalを検証し、実際にCurrent State変更を適用する。
+= Current State / expected_previous_state / Transition Rule / Authority / ApprovalDecisionを検証し、実際にCurrent State変更を適用する。
 ```
 
 正式原則:
@@ -1929,6 +2000,13 @@ Request Authority
 ≠ Recommend Authority
 ≠ Approve Authority
 ≠ Apply Authority
+```
+
+さらに:
+
+```text
+ApprovalDecision
+≠ StateTransitionEvent
 ```
 
 ## 13.2 Single-Writer Principle
@@ -1972,6 +2050,8 @@ Request Authority
 
 Source Lifecycle行のSource Adapter / Collectorは、per-retrieval結果・Diagnostics・Request材料を提供できるが、Apply Authorityではない。
 
+FIX-015では、`Knowledge Promotion + Risk Governance`のように複数Approve Authorityを要求する場合、それぞれが独立したApprovalDecisionを生成する。
+
 ## 13.4 Shared State Transition Engine
 
 共通`State Transition Engine`は実装可能だが、Authorityではない。
@@ -1980,7 +2060,8 @@ Source Lifecycle行のSource Adapter / Collectorは、per-retrieval結果・Diag
 State Transition Engine
 = Transition Rule Check
 + expected_previous_state / CAS
-+ Approval / Authorization validation
++ Required ApprovalDecision Set validation
++ Approval scope / expiry / supersession / single-use validation
 + Atomic Apply
 + StateTransitionEvent persist
 + Current Projection update
@@ -2009,11 +2090,14 @@ Fast Pathでも:
 ```text
 Authority Check
 Transition Rule Check
+ApprovalDecision provenance
 StateTransitionEvent
 Audit / Trace
 ```
 
 を省略しない。
+
+Fast Pathでは、人間待ちを要求せず、明示されたEmergency Policyが`decision_method = AUTOMATED_POLICY`のApprovalDecisionを生成できる。
 
 FIX-014ではSource Fast Pathも「一回のTIMEOUT」ではなく、Provider outage等の明示Hard Trigger / Policy条件を要求する。
 
@@ -2036,13 +2120,15 @@ Source UNAVAILABLE → ACTIVE
 Root Cause resolved
 Revalidation / Health verification
 Cooldown / persistence
-Required Approval
+Required ApprovalDecision Set
 Current State再確認
 ```
 
 Restrictive Authorityが単独でRisk / Permissionを元へ戻してはならない。
 
 FIX-014ではSource Recovery時に一回のRetrieval SUCCESSだけで復帰確認を完了しない。
+
+FIX-015ではRecovery / Permission Expansionで要求するApprovalDecision集合をRestrictive Fast Pathと同等以上に厳しくする。
 
 ## 13.7 Human / Telegram
 
@@ -2053,6 +2139,7 @@ Human / Telegram
 → RuntimeCommand / Manual Override Request
 → Authentication / Authorization
 → Authority Flow
+→ ApprovalDecision
 → APPLY
 → StateTransitionEvent
 ```
@@ -2060,6 +2147,8 @@ Human / Telegram
 `/stop` / `/emergency` / `/no-entry`等のSafety Restrictionは、Policyで許可されたEmergency Fast Pathへ接続可能。
 
 `/risk-normal` / `/normal-live`等のRisk Expansion / Permission ExpansionはStrict Approvalを要求する。
+
+Human Request自体をApprovalDecisionとみなさない。
 
 ## 13.8 AI / Logger / Post-Trade
 
@@ -2069,22 +2158,113 @@ External AI Reviewは原則:
 REQUEST / RECOMMEND
 ```
 
-まで。AI単独でAPPROVE / APPLYしない。
+まで。AI単独でApprovalDecisionを生成するApprove Authority / APPLY Authorityを持たない。
 
-LoggerはStateTransitionEvent / AuditEventのCustodianであり、State Authorityではない。
+LoggerはApprovalDecision / StateTransitionEvent / AuditEventのCustodianになり得るが、Approve / Apply Authorityではない。
 
 Post-Trade AnalysisはState変更材料を分析しRequest / Recommendation候補を出せるが、Current Stateへ直接書き込まない。
 
 ## 13.9 ApprovalDecisionとの境界
 
-FIX-013では`APPROVE`責任を正式化するが、独立`ApprovalDecision` Objectはまだ作らない。
+FIX-015で`ApprovalDecision`を正式Object化する。
 
 ```text
-ApprovalDecision Object
-→ FIX-015で正式化
+Recommendation
+= Transitionを推奨する専門判断
+
+ApprovalDecision
+= 特定Target / Version / Transitionを許可・拒否・保留したGovernance Decision
+
+StateTransitionEvent
+= 実際にStateが変更された事実
+
+AuditEvent
+= 誰が何を操作・判断したかという監査記録
 ```
 
-FIX-013時点では`authorization_ref / recommendation_ref`等から後続Objectへ接続可能にする。
+正式Decision候補:
+
+```text
+APPROVE
+REJECT
+HOLD
+```
+
+`APPROVE_WITH_CONDITIONS`のような曖昧なDecisionを増やすより、条件未達は`HOLD`、利用範囲制限は`APPROVE + scope_constraints`として分離する。
+
+`ApprovalDecision`はStateではなくterminal immutable factであり、ApprovalDecision自体に`PENDING / APPROVED / EXPIRED / REVOKED`等の新Lifecycle State Machineを作らない。
+
+## 13.10 Multi-Approval
+
+複数Authorityが必要なTransitionでは、一つのApprovalDecisionへ複数Approverを詰め込まない。
+
+```text
+1 Authority
+= 1 ApprovalDecision
+```
+
+例:
+
+```text
+Production Promotion
+Knowledge Promotion → AD-KNOW-001 = APPROVE
+Risk Governance     → AD-RISK-001 = APPROVE
+```
+
+Apply条件:
+
+```text
+Required Approver Set
+⊆
+Valid APPROVE ApprovalDecision Set
+```
+
+一つでもRequired Authorityが`HOLD / REJECT / missing`ならApplyしない。
+
+各ApprovalDecisionは同一のTarget / Target Version / State Machine / From / Toへ整合していなければならない。
+
+## 13.11 Approval Scope / Expiry / Supersession / Single Use
+
+ApprovalDecisionは原則として特定TransitionへBindingする。
+
+```text
+Target
++ Target Version（Versioned Objectの場合）
++ State Machine
++ State Machine Version
++ expected_from_state
++ requested_to_state
+```
+
+原則:
+
+```text
+1 ApprovalDecision
+= 原則1 Transition Authorization
+```
+
+Apply前に確認する候補:
+
+```text
+decision == APPROVE
+Target一致
+Target Version一致
+State Machine一致
+From / To一致
+valid_from / expires_at有効
+Supersededされていない
+既に成功Transitionで使用されていない
+Scope条件一致
+Current State == expected_from_state
+Transition Rule合法
+Current Constraint / Policy条件成立
+```
+
+複数ApprovalDecisionのScopeが異なる場合、Effective Scopeは原則として全Required Approval ScopeのIntersection / 最も制限的な条件とする。
+
+過去ApprovalDecisionをCurrent条件へ合わせて書き換えない。判断を変更する場合は新しいApprovalDecisionを生成し、`supersedes_approval_decision_ref`等で追跡する。
+
+既にStateTransitionEventが成功している場合、後のREJECT Decisionで過去StateTransitionEventを削除・改変しない。必要なら新しい合法Transitionを行う。
 
 ---
 
@@ -2121,6 +2301,8 @@ EMERGENCY → NORMAL
 FIX-013以降、この非対称性はAuthorityにも適用する。
 
 FIX-014ではSource Lifecycleも同様に、明示Hard Triggerによる制限側遷移と、複数確認を要求するRecoveryを非対称に扱う。
+
+FIX-015ではFast Path / Strict PathのどちらでもApprovalDecision provenanceを失わない。
 
 ---
 
@@ -2209,11 +2391,13 @@ Manual Overrideが実際にState変更へ成功した場合、そのStateTransit
 
 ```yaml
 manual_override_ref:
-authorization_ref:
+approval_decision_refs: []
 requested_by_actor:
 ```
 
 を残し、自動遷移と人間Overrideを区別する。
+
+旧Schemaの`authorization_ref`はLegacy single-approval provenanceとして読取可能性を維持する。
 
 Override要求が拒否された場合は成功StateTransitionEventを生成しない。
 
@@ -2267,6 +2451,8 @@ FIX-013以降、重要TransitionではRequest / Recommendation / Approval / Appl
 
 FIX-014ではSourceMetadata retrieval historyとSource Lifecycle StateTransitionEventを同じ履歴として混ぜず、必要なTraceだけ接続する。
 
+FIX-015ではStateTransitionEventの`approval_decision_refs`から、Approve Authority / Policy / Evidence / Scopeまで逆引き可能にする。
+
 将来のDependency / Impact Contractで正式化する。
 
 ---
@@ -2293,6 +2479,8 @@ FIX-012では、最近のDemo / Live劣化を研究成熟度へ直接混ぜず�
 StateTransitionEventの`trigger_refs`から、State変更を起こしたEvidencePackage / ResearchResult / ProductionEvidence等へ遡れることを目標とする。
 
 Source Lifecycleでは必要に応じて複数SourceMetadata / Monitoring Resultを`trigger_refs`へ関連付け、一回のRetrieval結果だけにLifecycle意味を持たせない。
+
+ApprovalDecisionでも`evidence_refs / evidence_package_refs / constraint_refs / policy_refs`等から承認根拠へ遡れる設計を目標とする。
 
 ---
 
@@ -2327,6 +2515,8 @@ Provider A ACTIVE → UNAVAILABLE
 
 へ変換可能にする。
 
+FIX-015以降はApprovalDecision履歴も、承認が早すぎた・HOLDが頻発した・どのPolicyがREJECTを増やした等のGovernance Research材料にできる。
+
 State履歴そのものを消さず、Knowledgeは履歴を参照する。
 
 ---
@@ -2347,6 +2537,7 @@ State履歴そのものを消さず、Knowledgeは履歴を参照する。
 9. 長期維持価値があるか？
 10. FIX-012の別State軸の責任を侵食していないか？
 11. FIX-014のper-retrieval結果をSource Stateとして誤追加していないか？
+12. FIX-015のApprovalDecisionをApproval Lifecycle Stateとして誤追加していないか？
 ```
 
 満たさない場合、新Stateを増やさない。
@@ -2370,6 +2561,7 @@ State名・意味・遷移を変更する場合、`DESIGN_CHANGE_RULES.md` に�
 - Apply Authority変更
 - Emergency Fast Path権限変更
 - Source LifecycleとRetrieval Resultの責任統合
+- ApprovalDecisionのRequired Authority / Scope / Transition Binding意味変更
 
 これらは既存DB / Python Enum / Test / Monitoring / Telegram / Analytics / StateTransitionEvent解釈へ影響するため、Impact Analysisを必須候補とする。
 
@@ -2378,6 +2570,8 @@ State Machine Version変更時も過去StateTransitionEventを新Versionの意�
 FIX-012の旧StateはMigration Mappingを残し、過去履歴を物理削除しない。
 
 FIX-014以前の`SourceMetadata.status`を、現在のSource Lifecycle Stateへ無言で変換して過去Recordを上書きしない。
+
+FIX-015以前の`authorization_ref / authorized_by_role`を持つStateTransitionEventを推測で複数ApprovalDecisionへ書き換えず、旧Schema Versionとして読取可能性を維持する。
 
 ---
 
@@ -2432,6 +2626,15 @@ if source_metadata.retrieval_status == "TIMEOUT":
 
 Retrieval EventはLifecycle Transition材料として集約・評価し、正式Authority Flowを通す。
 
+FIX-015以降、次のような実装を新規採用しない。
+
+```python
+if request.approved:
+    current_state = request.to_state
+```
+
+概念上はRequired ApprovalDecision Setを検証し、Apply Authority / State Transition Engine経由で適用する。
+
 ---
 
 # 25. Database実装への変換方針
@@ -2458,7 +2661,7 @@ OBJ-STATE-001: StateTransitionEvent
 
 を保存する。
 
-論理Fields:
+論理Fields候補:
 
 ```yaml
 state_transition_event_id:
@@ -2475,17 +2678,25 @@ reason_codes: []
 requested_by_role:
 recommended_by_role:
 recommendation_ref:
-authorized_by_role:
+approval_decision_refs: []
 applied_by_role:
 requested_by_actor:
 transitioned_at:
 effective_at:
 created_at:
 manual_override_ref:
-authorization_ref:
 previous_transition_event_ref:
 trace_id:
 ```
+
+Legacy Fields:
+
+```yaml
+authorized_by_role:
+authorization_ref:
+```
+
+はFIX-015以前のsingle-approval provenanceとして読取可能性を維持し、新規Canonical approval provenanceは`approval_decision_refs`とする。
 
 FIX-012では同一Knowledgeについて:
 
@@ -2500,6 +2711,8 @@ PRODUCTION_PROMOTION
 FIX-013ではDBへ直接書き込めるRole / Serviceを無制限に増やさず、State MachineごとのApply Authority / write pathを一意にできる設計を優先する。
 
 FIX-014では`SourceMetadata.retrieval_status`とSource Lifecycle Current Projectionを一つの`status`列へ圧縮しない。
+
+FIX-015ではApprovalDecisionをCurrent State列やStateTransitionEventの単一Authorization文字列へ圧縮しない。
 
 正式Table名・Index・Transaction方式は `DATABASE_SCHEMA.md` で確定する。
 
@@ -2545,7 +2758,7 @@ Data Quality: HEALTHY
 
 異なるState MachineやRetrieval結果を一つの `SYSTEM_STATUS = BAD` / `source_status = BAD` へ潰さない。
 
-必要時にはCurrent Stateだけでなく、直近`StateTransitionEvent`の変更時刻・Reason Code・Authority provenanceを表示可能にする。
+必要時にはCurrent Stateだけでなく、直近`StateTransitionEvent`の変更時刻・Reason Code・ApprovalDecision refs・Apply Authority provenanceを表示可能にする。
 
 ---
 
@@ -2564,6 +2777,7 @@ Data Quality: HEALTHY
 - Current Projectionが壊れてもTransition Historyから再構築可能な設計を維持する
 - Authority Matrix / Apply Authority変更もVersion / Audit対象にする
 - Provider変更後もLogical Source概念とHistorical SourceMetadata provenanceを保持する
+- ApprovalDecision / Approval Policy / Authority PolicyのVersion provenanceを保持する
 
 FIX-012以前の:
 
@@ -2576,6 +2790,8 @@ Knowledge SUSPENDED
 も旧State Machine Versionとして履歴を保存し、新定義へ無言で書き換えない。
 
 FIX-014以前のSourceMetadata `status`も旧Schemaの意味を保持し、新しいSource Lifecycleへ推測で再解釈して過去Recordを書き換えない。
+
+FIX-015以前のAuthorization provenanceも旧Schemaとして維持し、後から存在しなかったApprovalDecisionを捏造して補完しない。
 
 ---
 
@@ -2593,6 +2809,8 @@ StateまたはState Machineを正式化するには最低限:
 □ Recommend Authority
 □ Approve Authority
 □ Apply Authority
+□ Required Approval Authority Set
+□ ApprovalDecision / Policy参照要否
 □ Emergency / Restrictive Authority要否
 □ 入口条件
 □ 出口条件
@@ -2617,6 +2835,15 @@ Source Lifecycleでは追加で:
 □ per-retrieval結果とLifecycleを分離している
 □ Logical Source / Provider Sourceを区別している
 □ Recovery確認条件が単発成功に依存していない
+```
+
+Approvalを要求するState Machineでは追加で:
+
+```text
+□ ApprovalDecisionのTarget / Version / From / To Bindingが定義可能
+□ Multi-Approval時のRequired Authority Setを定義可能
+□ Scope / Expiry / Supersession / Single-useを検証可能
+□ RestrictionとRecoveryでApproval強度を分けられる
 ```
 
 を確認する。
@@ -2648,12 +2875,18 @@ State Transition atomic write方式
 State Transition Engineの実装方式
 Authority delegation / secondary authorityの具体的IAM表現
 Emergency Authorityの認証方式
-ApprovalDecision Object / schema（FIX-015）
+ApprovalDecision field type / required / nullable
+ApprovalDecision enum namespace
+ApprovalDecision single-use DB enforcement
+Required Approval Setの物理表現
+Scope intersection実装
+Expiry比較・clock policy
+Supersession cardinality
 ```
 
 理由:
 
-これらはState名そのものではなくPolicy / Threshold / Contract / Storage / Security / Approval Objectの問題であり、Research・Risk・Operations・Data Contract・DB・Security設計でVersion付きにした方がよい。
+これらはState名そのものではなくPolicy / Threshold / Contract / Storage / Security / Approval Objectの物理仕様問題であり、Research・Risk・Operations・Data Contract・DB・Security設計でVersion付きにした方がよい。
 
 ---
 
@@ -2720,7 +2953,12 @@ DETECTED → CLASSIFYING → CONTAINED → MITIGATING → RECOVERING → RESOLVE
 Authorityは全State Machineで概念上:
 
 ```text
-REQUEST → RECOMMEND → APPROVE → APPLY → StateTransitionEvent
+REQUEST
+→ RECOMMEND
+→ APPROVE
+→ ApprovalDecision
+→ APPLY
+→ StateTransitionEvent
 ```
 
 へ分離する。
@@ -2792,15 +3030,31 @@ Logical Source
 
 を正式に分離する。
 
+FIX-015ではさらに:
+
+```text
+Recommendation
+≠ ApprovalDecision
+≠ StateTransitionEvent
+≠ AuditEvent
+
+APPROVE
+≠ APPLIED
+```
+
+を正式に分離する。
+
+ApprovalDecisionは特定Target / Version / TransitionへBindingされたImmutable Governance Decisionとし、Multi-Approvalは複数Decision、ApplyはRequired Approval Setの検証後にのみ行う。
+
 これにより市場理解OSは、数年後・数十年後でも、
 
 ```text
-「このRequestだけ失敗したのか？」
-「Provider自体が現在使えないのか？」
-「Logical Source全体が利用不能なのか？」
-「取得には成功したがData Qualityが悪いのか？」
-「Fallback ProviderでLogical Sourceを維持できたのか？」
-「誰がSource State変更を承認・Applyしたのか？」
+「誰がこのTransitionを推奨したのか？」
+「誰がどのPolicy / Evidenceで承認したのか？」
+「複数承認のどれが必要だったのか？」
+「承認されたがApplyされなかったのか？」
+「承認Scope / Expiry / Versionは何だったのか？」
+「実際に誰がState変更をApplyしたのか？」
 ```
 
 まで再現可能にする。
