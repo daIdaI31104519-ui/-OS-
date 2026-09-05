@@ -3792,7 +3792,7 @@ change_magnitude:
 
 ## Invariants
 
-短期Noiseで状態が頻繁反転しないよう、Hysteresis / Persistence規則を後続設計で持つ。
+短期ノイズで状態が頻繁反転しないよう、Hysteresis / Persistence規則を後続設計で持つ。
 
 ---
 
