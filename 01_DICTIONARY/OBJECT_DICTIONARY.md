@@ -183,6 +183,8 @@ FIX-014以降、`SourceMetadata.status`のように「一回の取得結果」�
 
 FIX-015以降、Approvalを単一Boolean / `authorized=true` / Stateと混同せず、正式な`ApprovalDecision`へ分離する。
 
+FIX-016以降、Knowledge固有のProduction Promotion許可とCurrent Risk PermissionをField名でも分離し、`RiskState`にProduction Promotion Stageを所有させない。
+
 ---
 
 # 5. IDとTraceの共通原則
@@ -3073,7 +3075,7 @@ reopen_or_suspend_reason
 
 ## Meaning
 
-Productionが参照するHypothesis / Edgeの登録情報。FIX-012では研究成熟度・Knowledge Aging / Health・Production Promotion Stageを別参照として保持するEntry Object。
+Productionが参照するHypothesis / Edgeの登録情報。FIX-012では研究成熟度・Knowledge Aging / Health・Production Promotion Stageを別参照として保持するEntry Object。FIX-016ではCurrent Production StageとKnowledge固有の承認済みPromotion上限を明確に分離する。
 
 ## Owner
 
@@ -3091,7 +3093,7 @@ applicability_ref:
 constraint_refs: []
 assessment_profile_ref:
 evidence_package_ref:
-max_production_stage:
+authorized_production_stage_ceiling:
 expires_or_review_due_at:
 ```
 
@@ -3104,14 +3106,32 @@ Target Lifecycle State
 KnowledgeLifecycleProfile
 = Knowledge Aging / Health
 
-Production Promotion Stage
-= RESEARCH_ONLY / SHADOW / DEMO_FORWARD / MICRO_LIVE / LIMITED_LIVE / NORMAL_LIVE / PAUSED
+production_stage
+= 当該KnowledgeのCurrent Production Promotion Stage
+
+authorized_production_stage_ceiling
+= 現在のValidation / Approvalで当該Knowledgeが到達を許可されている最大Production Promotion Stage
 
 Risk State
-= Current OS safety permission。Pool Entryへ埋め込まない
+= Current OS / Portfolio / Market Instance safety permission。Pool Entryへ埋め込まない
 ```
 
-## FIX-012 Field Migration
+Production PromotionのOrdinal順序は:
+
+```text
+RESEARCH_ONLY
+< SHADOW
+< DEMO_FORWARD
+< MICRO_LIVE
+< LIMITED_LIVE
+< NORMAL_LIVE
+```
+
+とする。
+
+`PAUSED`はOrdinal Ceiling比較へ利用するStageではなく、当該Knowledge固有のProduction利用停止状態として扱う。
+
+## FIX-012 / FIX-016 Field Migration
 
 ```text
 hypothesis_or_edge_ref
@@ -3119,17 +3139,68 @@ hypothesis_or_edge_ref
 
 hypothesis_state_ref
 → target_lifecycle_state_ref
+
+max_production_stage
+→ authorized_production_stage_ceiling
 ```
 
 Edgeも同じPool Entryを利用するため、Hypothesis専用に見えるField名を廃止する。
+
+FIX-016では旧`max_production_stage`を、Knowledge固有の承認済みProduction Promotion Ceilingという意味へ明確化して`authorized_production_stage_ceiling`へ改名する。
+
+重要:
+
+```text
+RiskState.allowed_trade_stage
+→ authorized_production_stage_ceiling
+```
+
+とはMigrationしない。両FieldはOwner / Scope / Meaningが異なる。
+
+## FIX-016 Permission Boundary
+
+```text
+production_stage
+= 現在地点
+
+authorized_production_stage_ceiling
+= Knowledgeとして承認された最大到達可能地点
+
+RiskState.state / allowed_exposure
+= 今この瞬間、OS / Portfolio / Market InstanceとしてRiskを取ってよい範囲
+```
+
+したがって:
+
+```text
+production_stage = NORMAL_LIVE
+RiskState = MICRO_ONLY
+```
+
+は成立する。この場合KnowledgeのProduction資格を`MICRO_LIVE`へ書き換えず、Runtime Risk Gate側でMICRO制限を適用する。
+
+また:
+
+```text
+production_stage = PAUSED
+RiskState = NORMAL
+```
+
+も成立する。この場合OS全体は正常だが、そのKnowledgeだけProduction利用停止である。
 
 ## Invariants
 
 - `SUPPORTED` と `DEMO_FORWARD` を同じstatus列挙へ入れない
 - `APPROVED` は研究成熟度であり、現在市場で即取引可能という意味ではない
-- Productionは `target_lifecycle_state_ref`、`knowledge_lifecycle_ref`、`production_stage`、Applicability、Constraint、Risk Stateを別々に確認する
+- Productionは `target_lifecycle_state_ref`、`knowledge_lifecycle_ref`、`production_stage`、`authorized_production_stage_ceiling`、Applicability、Constraint、Risk Stateを別々に確認する
 - 未承認Hypothesis / EdgeをProductionが自由に有効化しない
-- `max_production_stage` をRisk Stateと混同しない
+- `production_stage` は当該KnowledgeのCurrent Production Promotion Stageである
+- `authorized_production_stage_ceiling` は当該Knowledgeが現在のApproval / Validationで到達可能な最大Stageであり、Current Stageではない
+- Ceilingが高くても`production_stage`を自動昇格させない
+- 通常Ordinal Stageでは`production_stage`が`authorized_production_stage_ceiling`を超えてはならない
+- `PAUSED`をOrdinal Stageとして`min / max`計算しない
+- Risk悪化だけを理由にKnowledgeの`production_stage`を書き換えない
+- Knowledge固有のProduction停止は`production_stage = PAUSED`、System-wide Risk制限は`RiskState = NO_NEW_ENTRY / EMERGENCY`等で別々に表す
 - `NORMAL_LIVE`でもRisk Stateが`NO_NEW_ENTRY / EMERGENCY`なら新規Trade許可を意味しない
 
 ---
@@ -3216,7 +3287,8 @@ Signal Engine
 
 - `Approved != Applicable`。承認済みでも現在条件に適用できなければSetへ入れない
 - DRAFT / RESEARCHING / 未承認HypothesisをLive用ApplicableHypothesisSetへ入れない
-- Production Promotion Stage / `max_production_stage` を超えた利用を許可しない
+- Production Promotion Stage / `authorized_production_stage_ceiling` を超えた利用を許可しない
+- Risk StateをProduction Promotion Stageへ変換して比較しない
 - 仮説数の多数決でDirectionを決めない
 - PRIMARY / SUPPORTING / CONDITIONAL / CONTRADICTINGの意味を保持する
 - Shared Evidenceを複数Hypothesisの独立Evidenceとして二重評価しない
@@ -3427,7 +3499,7 @@ Defense = 今取ってよいか。
 
 ## Meaning
 
-現在OSがどの程度Riskを許可するかを表す横断状態Object。FIX-012では個別Hypothesis / EdgeのProduction Promotion Stageとは完全に分離する。
+現在OSがどの程度Riskを許可するかを表す横断状態Object。FIX-012では個別Hypothesis / EdgeのProduction Promotion Stageとは完全に分離する。FIX-016ではRiskStateからProduction Promotion Stage概念を除外し、Current Risk Permissionだけを保持する。
 
 ## Owner
 
@@ -3456,20 +3528,66 @@ execution_health_state:
 data_health_state:
 market_novelty_state:
 allowed_exposure:
-allowed_trade_stage:
 effective_from:
 review_condition:
 ```
+
+## FIX-016 Production Permission Boundary
+
+```text
+RiskState.state
+= OS / Portfolio / Market InstanceのCurrent Risk Permission
+
+RiskState.allowed_exposure
+= Current Risk Policyで許可されるExposure範囲
+
+HypothesisPoolEntry.production_stage
+= Knowledge固有のCurrent Production Promotion Stage
+
+HypothesisPoolEntry.authorized_production_stage_ceiling
+= Knowledge固有の承認済み最大Promotion上限
+```
+
+したがってRiskStateは`MICRO_ONLY / NO_NEW_ENTRY / EMERGENCY`等で現在の実行Riskを制限するが、Knowledgeの`production_stage`を書き換えない。
+
+## FIX-016 Legacy Field Migration
+
+旧Field:
+
+```text
+RiskState.allowed_trade_stage
+```
+
+はFIX-016以降、新規Canonical Fieldとして使用しない。
+
+```text
+RiskState.allowed_trade_stage
+→ RETIRED legacy field
+```
+
+重要:
+
+```text
+RiskState.allowed_trade_stage
+→ HypothesisPoolEntry.authorized_production_stage_ceiling
+```
+
+という自動Migrationは禁止する。前者はRisk側の旧Permission表現、後者はKnowledge固有のApproval Ceilingであり、意味・Scope・Ownerが異なる。
+
+過去Recordは旧Schema Versionとして読取可能性を維持し、当時のRisk判断を現在のProduction Promotion Ceilingへ推測変換しない。
 
 ## Invariants
 
 - 損失発生後だけでなく、Knowledge / Data / Execution劣化もRisk縮小理由になり得る
 - `RiskState` はHypothesis / Edgeの研究成熟度を表さない
 - `RiskState` は個別KnowledgeのProduction Promotion Stageを表さない
+- `RiskState` は`authorized_production_stage_ceiling`を所有しない
 - KnowledgeLifecycleProfileへRisk Stateを複製しない
+- Risk悪化だけでHypothesisPoolEntryの`production_stage`を降格・PAUSEDへ書き換えない
 - `NORMAL_LIVE` Knowledgeが存在してもRiskState = `NO_NEW_ENTRY`なら新規Entryは禁止
 - FIX-013以降、Defense等がRestrictive Transitionを要求・推奨できても、Current Risk Stateの書込みはRisk State Apply Authority経由とする
 - FIX-015以降、Risk State Transitionに必要なApprovalDecision SetをApply前に検証する
+- Runtimeの実取引可否はProduction PromotionとRisk Permissionを別Gateとして評価し、`min(production_stage, risk_stage)`のようなStage比較へ潰さない
 
 数値閾値はResearch / Risk Designで別途定義する。
 
@@ -3674,7 +3792,7 @@ change_magnitude:
 
 ## Invariants
 
-短期ノイズで状態が頻繁反転しないよう、Hysteresis / Persistence規則を後続設計で持つ。
+短期Noiseで状態が頻繁反転しないよう、Hysteresis / Persistence規則を後続設計で持つ。
 
 ---
 
@@ -4440,6 +4558,16 @@ Recommendation
 
 を分離する。
 
+FIX-016ではProduction / Riskについて:
+
+```text
+production_stage
+≠ authorized_production_stage_ceiling
+≠ RiskState.state / allowed_exposure
+```
+
+を分離する。
+
 ApplicableHypothesisSet / TradeThesis / EntryThesisはそれぞれ生成時点の情報を固定し、後から現在Knowledgeが変化しても過去Production判断を無言で書き換えない。
 
 StateについてもCurrent Stateだけを上書きしてTransition Historyを失わない。
@@ -4519,12 +4647,13 @@ Logical Source / Provider Source
 
 ProductionEvidence自体も`ExecutionRecord + EntryThesis + Live Context`まで逆引き可能にする。
 
-FIX-012ではHypothesisPoolEntryから:
+FIX-012 / FIX-016ではHypothesisPoolEntryから:
 
 ```text
 target lifecycle state
 knowledge lifecycle
-production stage
+current production stage
+authorized production stage ceiling
 ```
 
 を別々に逆引きでき、Risk StateはDefense / EntryThesis側から別参照する。
@@ -4603,6 +4732,8 @@ ApprovalDecision
 
 を追跡可能にする。
 
+FIX-016ではRisk悪化が発生してもKnowledge固有の`production_stage`履歴を一時Risk制御で汚染せず、Risk State TransitionとProduction Promotion Transitionを別々にTraceする。
+
 Entry後はEntryThesisを書き換えず、影響はCurrent State / Supervisor / Defense / Incidentで扱う。
 
 重要なCurrent State変更はStateTransitionEventに残し、後からForward Impactの因果順序を追跡可能にする。
@@ -4646,6 +4777,7 @@ StateTransitionEvent ≠ AuditEvent
 Hypothesis / Edge Lifecycle ≠ Knowledge Aging / Health
 Knowledge Aging / Health ≠ Production Promotion Stage
 Production Promotion Stage ≠ Risk State
+production_stage ≠ authorized_production_stage_ceiling ≠ RiskState.state / allowed_exposure
 Request Authority ≠ Recommend Authority ≠ Approve Authority ≠ Apply Authority
 PositionThesisState ≠ ExitDecision
 TradeResult ≠ TradeThesisEvaluation
@@ -4724,6 +4856,14 @@ APPROVE
 ≠ APPLIED
 ```
 
+FIX-016では次を固定する。
+
+```text
+Current Production Stage
+≠ Authorized Production Stage Ceiling
+≠ Current Risk Permission
+```
+
 ---
 
 # 13. ObjectをTop-Level Layerへ昇格させない原則
@@ -4762,6 +4902,8 @@ FIX-013の各`State Controller`は独立巨大Layerではなく、各State Machi
 FIX-014ではRetrieval Result / Source Lifecycle / Data Quality分離のために新しい巨大Layerを追加せず、既存`SourceMetadata`・`STATE-SRC-001`・`QualityProfile`の責任境界で解決する。
 
 FIX-015ではApprovalDecisionを正式Object化しても、`Approval Layer / Universal Approval Manager`のような新Top-Level Layerを追加しない。生成責任は各State Machineの既存Approve Authorityに置く。
+
+FIX-016ではProduction / Risk分離のために`EffectiveProductionStageObject`等を新設せず、既存`HypothesisPoolEntry`と`RiskState`を別Gateとして評価する。
 
 ---
 
@@ -4802,6 +4944,8 @@ FIX-015の`ApprovalDecision`は次を満たすためObject追加Gateを通過す
 - Governance Research / Audit / Long-Term再現価値がある
 ```
 
+FIX-016では新Objectを追加せず、`production_stage / authorized_production_stage_ceiling / RiskState`の責任分離で解決する。
+
 ---
 
 # 15. Object変更ルール
@@ -4825,6 +4969,8 @@ FIX-013ではAuthority Field追加後も過去StateTransitionEventを推測で�
 FIX-014では過去`SourceMetadata.status`をCurrent Source Lifecycleへ推測変換して旧Recordを書き換えず、旧Schema Versionとして読取可能性を維持する。
 
 FIX-015では過去StateTransitionEventの`authorized_by_role / authorization_ref`を複数ApprovalDecisionへ推測変換しない。旧Schema Versionとして保持し、新規Eventから`approval_decision_refs`をCanonicalとする。
+
+FIX-016では旧`HypothesisPoolEntry.max_production_stage`を`authorized_production_stage_ceiling`へ意味明確化してMigration可能にする。一方、旧`RiskState.allowed_trade_stage`はRetired Fieldとして保持し、Knowledge側Ceilingへ推測変換しない。
 
 ---
 
@@ -4888,6 +5034,21 @@ ApprovalDecision
 
 StateTransitionEvent
 = Apply成功後のHistorical Fact
+```
+
+として責任を分離する。
+
+FIX-016では:
+
+```text
+STATE-PRD-001
+= Knowledge固有のCurrent Production Promotion Stage
+
+HypothesisPoolEntry.authorized_production_stage_ceiling
+= Knowledge固有のApproval Ceiling
+
+STATE-RISK-001
+= Current OS / Portfolio / Market Instance Risk Permission
 ```
 
 として責任を分離する。
@@ -5029,6 +5190,23 @@ Emergency automated-policy ApprovalDecision
 Recovery / Permission Expansion stricter approval policy
 ```
 
+FIX-016で決めた次もData / Processing / Production / Risk Contractで固定する。
+
+```text
+production_stage field type / enum
+Production Promotion ordinal ordering
+authorized_production_stage_ceiling field type / required / nullable
+production_stage <= authorized_production_stage_ceiling validation
+PAUSEDのnon-ordinal扱い
+Ceiling変更とProduction Promotion Transitionの境界
+RiskState.allowed_exposure representation
+RiskStateとProduction Promotionの最終Gate arbitration
+Legacy max_production_stage migration
+Legacy allowed_trade_stage retirement / read compatibility
+RiskState.allowed_trade_stageをauthorized_production_stage_ceilingへ変換しない制約
+EntryThesis / DefenseDecisionでのCurrent Production / Risk snapshot rule
+```
+
 ---
 
 # 18. ObjectとDATABASE_SCHEMAの関係
@@ -5062,6 +5240,8 @@ FIX-012ではHypothesis / Edge Lifecycle、Knowledge Aging / Health、Production
 FIX-013ではCurrent State tableへ書込可能なRole / Serviceを無制限に増やさず、State MachineごとのApply Authority / single write pathを実装可能にする。
 
 FIX-015ではApprovalDecisionをCurrent State列やStateTransitionEventの単一`authorized_by`文字列へ圧縮しない。Multi-Approval / Scope / Policy / Evidence provenanceを失わない。
+
+FIX-016ではKnowledge固有の`production_stage / authorized_production_stage_ceiling`とRiskStateを同一`trade_stage` Columnへ圧縮しない。
 
 DB Schemaは後からStorage効率・Query・Migrationを考えて決める。
 
@@ -5142,6 +5322,28 @@ StateTransitionEvent
 
 を通す。
 
+FIX-016以降、次のようなStage合成を新規採用しない。
+
+```python
+effective_stage = min(
+    pool_entry.authorized_production_stage_ceiling,
+    risk_state.allowed_trade_stage,
+)
+```
+
+RiskStateにProduction Stageを持たせず、概念上:
+
+```text
+Current Production Stage
+AND Authorized Production Ceiling
+AND Applicability
+AND Constraint
+AND Current Risk State
+AND Allowed Exposure
+```
+
+を別Gateとして評価する。
+
 ---
 
 # 20. Storage Lifecycle区分
@@ -5188,6 +5390,8 @@ FIX-013以前のStateTransitionEventでRecommendation provenanceを持たないE
 FIX-014以前の`SourceMetadata.status`を持つRecordも旧Schema Versionとして保持し、現在Lifecycleを推測して上書きしない。
 
 FIX-015以前の`authorized_by_role / authorization_ref`を持つStateTransitionEventも旧Schema Versionとして保持し、存在しなかったApprovalDecisionを後から捏造しない。
+
+FIX-016以前の`HypothesisPoolEntry.max_production_stage / RiskState.allowed_trade_stage`を持つRecordも旧Schema Versionとして読取可能性を維持し、Risk側旧FieldをKnowledge側Ceilingへ推測変換しない。
 
 具体的保存期間は `STORAGE.md` / Long-Term Governanceで決める。
 
@@ -5268,6 +5472,15 @@ ApprovalDecisionでは追加で:
 □ Single-use semantics
 □ Supersession semantics
 □ StateTransitionEvent relation
+```
+
+Production Permission関連Objectでは追加で:
+
+```text
+□ Current Production Stage
+□ Authorized Production Stage Ceiling
+□ Risk Stateとの責任境界
+□ Legacy field migration
 ```
 
 を確認する。
@@ -5435,6 +5648,7 @@ RuntimeStateHistory
 ResearchPlanLifecycleObject
 ResearchPlanLockObject
 EdgeHealthObject
+EffectiveProductionStageObject
 ```
 
 理由:
@@ -5447,6 +5661,7 @@ EdgeHealthObject
 - 個別State History名 = 共通`StateTransitionEvent`を`state_machine_type`で利用し、履歴Objectを乱立させない
 - ResearchPlan Lifecycle / Lock = FIX-011では新Objectを作らず、ResearchPlanの独立State Machineとして表現する
 - `EdgeHealthObject` = FIX-012では新設せず、Edge maturityはEdge Lifecycle、現在のKnowledge healthはKnowledgeLifecycleProfileで表す
+- `EffectiveProductionStageObject` = FIX-016ではProduction Permission / Risk PermissionをDerivedな一つのStageへ統合せず、実行時Gateで別々に評価する
 
 FIX-015により`ApprovalDecision`はこの「意図的にObject化しない」一覧から除外し、`OBJ-GOV-001`として正式化した。
 
@@ -5483,13 +5698,14 @@ COUNTERFACTUAL
 9. **FIX-012でHypothesis / Edge Lifecycle・Knowledge Aging / Health・Production Promotion Stage・Risk Stateを完全分離。Gate順序、AGING / STALE / DEGRADED時のProduction Policy、PAUSED復帰条件、Cardinality、旧Field / State Migrationは `DATA_CONTRACT.md` / Production Contractで固定する**
 10. **FIX-014でSourceMetadata Retrieval Result・Source Lifecycle・Data Qualityを分離。retrieval_status型、Logical/Provider Source identity、Failure aggregation、Fallback、Recovery、Legacy status MigrationはData / Source / Monitoring Contractで固定する**
 11. **FIX-015でApprovalDecision Objectを正式化済み。Field型、Required/Nullable、Decision Enum、Policy/Authority refs、Required Approval Set、Scope intersection、Expiry、Single-use、Supersession、ApprovalDecision↔StateTransitionEvent CardinalityはData / Processing / Authority / DB Contractで固定する**
-12. Soft / Hard ContradictionのProduction Gate → Production Contract
-13. Risk Stateの閾値 → Risk Design / Research
-14. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
-15. Object間Cardinality → `DATA_CONTRACT.md` / `DATABASE_SCHEMA.md`
-16. Retention期間 → Storage Governance
-17. Encryption / Secret分類 → Security Design
-18. Schema Migration実装 → Version / Migration Design
+12. **FIX-016でCurrent Production Stage・Authorized Production Stage Ceiling・Current Risk Permissionを分離。Stage型、Ceiling validation、PAUSED non-ordinal、Risk Gate arbitration、Legacy `max_production_stage / allowed_trade_stage` MigrationはData / Processing / Production / Risk Contractで固定する**
+13. Soft / Hard ContradictionのProduction Gate → Production Contract
+14. Risk Stateの閾値 → Risk Design / Research
+15. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
+16. Object間Cardinality → `DATA_CONTRACT.md` / `DATABASE_SCHEMA.md`
+17. Retention期間 → Storage Governance
+18. Encryption / Secret分類 → Security Design
+19. Schema Migration実装 → Version / Migration Design
 
 ---
 
@@ -5584,5 +5800,28 @@ ApprovalDecision
 ```
 
 とする。
+
+FIX-016ではさらに:
+
+> **Knowledge固有のProduction昇格資格と、現在OSが許可するRiskを別責任として保持し、一時的なRisk悪化でKnowledgeのProduction Promotion履歴を書き換えない。**
+
+```text
+production_stage
+= Current Knowledge Production Stage
+
+authorized_production_stage_ceiling
+= Authorized Knowledge Promotion Ceiling
+
+RiskState.state / allowed_exposure
+= Current Runtime Risk Permission
+```
+
+正式原則:
+
+```text
+Current Production Stage
+≠ Authorized Production Stage Ceiling
+≠ Current Risk Permission
+```
 
 何十年以上運用するため、Python・DB・Exchange・AI Provider・Data Providerが変わっても、Objectの意味・Version・Provenance・Research履歴・Trade判断履歴・Approval履歴・State Transition履歴・Authority provenanceを失わない設計を優先する。
