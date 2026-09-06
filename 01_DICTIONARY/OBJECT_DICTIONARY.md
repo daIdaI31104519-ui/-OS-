@@ -185,6 +185,8 @@ FIX-015以降、Approvalを単一Boolean / `authorized=true` / Stateと混同せ
 
 FIX-016以降、Knowledge固有のProduction Promotion許可とCurrent Risk PermissionをField名でも分離し、`RiskState`にProduction Promotion Stageを所有させない。
 
+FIX-017以降、`KnowledgeLifecycleProfile`をEvidence履歴・Production利用許可・Risk許可・Storage配置の万能Objectにせず、KnowledgeのCurrent freshness / health / revalidation projectionへ限定する。
+
 ---
 
 # 5. IDとTraceの共通原則
@@ -3008,7 +3010,27 @@ Knowledge GraphはRelationshipを表示するViewであり、別Knowledgeを複�
 
 ## Meaning
 
-Knowledgeの年齢・鮮度・劣化・再検証必要性を管理する長期運用Object。FIX-012以降、Edge maturity・Production permission・Risk Stateを混ぜない。
+Knowledgeを現在どの程度、新鮮・再検証済み・健全とみなせるかを表すCurrent Projection Object。FIX-017以降、Evidence履歴・研究成熟度・Production利用許可・Current Risk Permission・Storage配置をこのObjectへ混在させない。
+
+```text
+KnowledgeLifecycleProfile
+= Current freshness / health / revalidation projection
+
+Evidence history
+= ResearchResult / EvidencePackage / ProductionEvidence等
+
+Research maturity
+= Hypothesis / Edge Lifecycle
+
+Production permission
+= Production Promotion
+
+Current risk permission
+= RiskState
+
+Storage / archive placement
+= Storage Lifecycle / Retention Governance
+```
 
 ## Owner
 
@@ -3019,17 +3041,17 @@ Knowledge Aging Governance
 ```yaml
 knowledge_lifecycle_id:
 target_object_ref:
-created_at:
-last_validated_at:
-last_demo_pass_at:
-last_live_evidence_at:
-revalidation_due_at:
 knowledge_aging_state:
-state_machine_version:
-latest_transition_event_ref:
+last_validated_at:
+revalidation_due_at:
+freshness_basis_refs: []
 degradation_reason_codes: []
 review_reason_codes: []
+state_machine_version:
+latest_transition_event_ref:
 ```
+
+`created_at / updated_at`等の共通Metadataは必要に応じて全Persistent Object共通Metadataとして持てるが、Evidence履歴の代替にしない。
 
 正式候補State:
 
@@ -3039,10 +3061,32 @@ CURRENT
 AGING
 STALE
 DEGRADED
-ARCHIVED
+UNKNOWN
 ```
 
-## FIX-012 Migration
+## State Meaning Boundary
+
+```text
+FRESH
+= 最近正式Validationされ、現在条件でもFreshness根拠が明確
+
+CURRENT
+= 現在利用可能な鮮度・健全性を満たす
+
+AGING
+= まだ無効ではないが再検証期限が近い、またはEvidence鮮度が低下中
+
+STALE
+= 再検証期限超過等により現在有効性を当然視できない
+
+DEGRADED
+= 新Evidence / Contradiction / Demo-Live Divergence等により現在の信頼性が実質低下
+
+UNKNOWN
+= Freshness / Healthを判断するEvidence自体が不足またはMigration上不明
+```
+
+## FIX-012 / FIX-017 Migration
 
 旧Fields / Semantics:
 
@@ -3058,14 +3102,65 @@ current_risk_stage
 
 reopen_or_suspend_reason
 → degradation_reason_codes / review_reason_codes等へ意味分離
+
+last_demo_pass_at
+→ FIX-017以降はLegacy evidence-history helper。新規Canonical Fieldから除外し、ResearchTrial / ResearchResult / EvidencePackage等を正本とする
+
+last_live_evidence_at
+→ FIX-017以降はLegacy evidence-history helper。新規Canonical Fieldから除外し、ProductionEvidence / EvidencePackage等を正本とする
+
+ARCHIVED
+→ FIX-017以降はKnowledge Aging / Healthの新規Canonical Stateから除外。Storage / Retention上のArchiveはSTATE-STO-001等のStorage Lifecycleで表す
 ```
+
+過去Recordの`last_demo_pass_at / last_live_evidence_at / ARCHIVED`を削除・推測上書きしない。旧Schema / 旧State Machine Versionとして読取可能性を維持する。
+
+旧`ARCHIVED` Recordを新Stateへ移す必要がある場合も、保存Tierだけを見て`STALE / DEGRADED / UNKNOWN`等へ機械変換しない。Freshness Evidenceを再評価するMigration Contractを別途要求する。
+
+## Freshness Basis
+
+`freshness_basis_refs`はCurrent freshness / health判断の根拠となったEvidence / Resultへの参照を保持する。
+
+候補:
+
+```text
+ResearchResult
+EvidencePackage
+ProductionEvidence
+Contradiction
+DemoLiveDivergence
+Validation Result represented by ResearchResult
+```
+
+`freshness_basis_refs`はEvidence内容そのものを複製するFieldではなく、なぜ現在のKnowledge Aging / Health Stateなのかを逆引きするTraceである。
+
+## Current Projection vs History
+
+```text
+KnowledgeLifecycleProfile
+= Current Projection
+
+StateTransitionEvent
+= Knowledge Aging / Health Transition History
+
+ResearchResult / EvidencePackage / ProductionEvidence等
+= State判断のEvidence / Why
+```
+
+KnowledgeLifecycleProfileを過去Validation一覧・Demo履歴・Live履歴の第二DBにしない。
 
 ## Invariants
 
 - 一度SUPPORTED / APPROVEDになったKnowledgeを永久真理として扱わない
-- `DEGRADED`だけで研究上のAPPROVED履歴を自動取消ししない
+- `STALE ≠ RETIRED`。古いだけでHypothesis / Edgeの研究地位をRetireしない
+- `DEGRADED ≠ RETIRED`。Current health低下だけで研究上のAPPROVED履歴を自動取消ししない
+- `DEGRADED ≠ PAUSED`。Production停止が必要なら別のProduction Promotion Transitionで判断する
 - Knowledge Aging / HealthをProduction `PAUSED`と混同しない
 - Risk StateをこのObjectへコピーしない
+- Storage `ARCHIVED`をKnowledge healthのStateとして新規利用しない
+- Demo / Live Evidenceの最新時刻をこのObjectだけの第二正本として管理しない
+- `freshness_basis_refs`から現在Stateの根拠Evidenceへ逆引き可能にする
+- Evidence不足を無理にSTALE / DEGRADEDへ分類せず`UNKNOWN`を利用できる
 
 ---
 
@@ -4568,6 +4663,18 @@ production_stage
 
 を分離する。
 
+FIX-017ではKnowledgeについて:
+
+```text
+KnowledgeLifecycleProfile Current Projection
+≠ Evidence History
+≠ Production Promotion
+≠ Risk State
+≠ Storage Lifecycle
+```
+
+を分離する。
+
 ApplicableHypothesisSet / TradeThesis / EntryThesisはそれぞれ生成時点の情報を固定し、後から現在Knowledgeが変化しても過去Production判断を無言で書き換えない。
 
 StateについてもCurrent Stateだけを上書きしてTransition Historyを失わない。
@@ -4598,6 +4705,8 @@ SourceMetadataから`logical_source_ref / provider_source_ref`へ遡り、Source
 State MachineではCurrent Projectionから`latest_transition_event_ref`等を参照可能にし、StateTransitionEvent側は`target_object_ref / previous_transition_event_ref / trigger_refs / recommendation_ref / approval_decision_refs`から履歴・Authority provenanceを追跡できるようにする。
 
 ApprovalDecision側は`request_ref / recommendation_refs / evidence_refs / evidence_package_refs / approval_policy_ref / authority_policy_ref`から承認判断の根拠へ遡れるようにする。
+
+KnowledgeLifecycleProfileは`freshness_basis_refs`から現在のFreshness / Health判断根拠へ遡れるようにし、Demo / Live Evidenceそのものを重複保存しない。
 
 ただし、EntryThesis等の監査・再現に重要なSnapshotでは、必要最小限のValueを同時固定してよい。
 
@@ -4657,6 +4766,18 @@ authorized production stage ceiling
 ```
 
 を別々に逆引きでき、Risk StateはDefense / EntryThesis側から別参照する。
+
+FIX-017ではKnowledgeLifecycleProfileから:
+
+```text
+knowledge_aging_state
+↓
+freshness_basis_refs
+↓
+ResearchResult / EvidencePackage / ProductionEvidence / Contradiction等
+```
+
+へ逆引きできるようにする。
 
 State / Approvalについては:
 
@@ -4734,6 +4855,8 @@ ApprovalDecision
 
 FIX-016ではRisk悪化が発生してもKnowledge固有の`production_stage`履歴を一時Risk制御で汚染せず、Risk State TransitionとProduction Promotion Transitionを別々にTraceする。
 
+FIX-017ではKnowledge health低下をStorage Archiveや研究Retireへ直結させず、Knowledge Aging / Health Transitionの後に各Domainが別々に再評価する。
+
 Entry後はEntryThesisを書き換えず、影響はCurrent State / Supervisor / Defense / Incidentで扱う。
 
 重要なCurrent State変更はStateTransitionEventに残し、後からForward Impactの因果順序を追跡可能にする。
@@ -4776,6 +4899,7 @@ Current State ≠ StateTransitionEvent
 StateTransitionEvent ≠ AuditEvent
 Hypothesis / Edge Lifecycle ≠ Knowledge Aging / Health
 Knowledge Aging / Health ≠ Production Promotion Stage
+Knowledge Aging / Health ≠ Storage Lifecycle
 Production Promotion Stage ≠ Risk State
 production_stage ≠ authorized_production_stage_ceiling ≠ RiskState.state / allowed_exposure
 Request Authority ≠ Recommend Authority ≠ Approve Authority ≠ Apply Authority
@@ -4864,6 +4988,16 @@ Current Production Stage
 ≠ Current Risk Permission
 ```
 
+FIX-017では次を固定する。
+
+```text
+Knowledge Current Freshness / Health
+≠ Evidence History
+≠ Production Permission
+≠ Current Risk Permission
+≠ Storage / Archive State
+```
+
 ---
 
 # 13. ObjectをTop-Level Layerへ昇格させない原則
@@ -4904,6 +5038,8 @@ FIX-014ではRetrieval Result / Source Lifecycle / Data Quality分離のため�
 FIX-015ではApprovalDecisionを正式Object化しても、`Approval Layer / Universal Approval Manager`のような新Top-Level Layerを追加しない。生成責任は各State Machineの既存Approve Authorityに置く。
 
 FIX-016ではProduction / Risk分離のために`EffectiveProductionStageObject`等を新設せず、既存`HypothesisPoolEntry`と`RiskState`を別Gateとして評価する。
+
+FIX-017ではKnowledge Agingを薄くするために`DemoFreshnessObject / LiveFreshnessObject / KnowledgeArchiveObject`等を新設せず、既存Evidence Object・StateTransitionEvent・Storage Lifecycleとの責任分離で解決する。
 
 ---
 
@@ -4946,6 +5082,8 @@ FIX-015の`ApprovalDecision`は次を満たすためObject追加Gateを通過す
 
 FIX-016では新Objectを追加せず、`production_stage / authorized_production_stage_ceiling / RiskState`の責任分離で解決する。
 
+FIX-017では新Objectを追加せず、KnowledgeLifecycleProfileをCurrent Projectionへ限定し、Evidence historyとStorage lifecycleを既存責任へ戻す。
+
 ---
 
 # 15. Object変更ルール
@@ -4971,6 +5109,8 @@ FIX-014では過去`SourceMetadata.status`をCurrent Source Lifecycleへ推測�
 FIX-015では過去StateTransitionEventの`authorized_by_role / authorization_ref`を複数ApprovalDecisionへ推測変換しない。旧Schema Versionとして保持し、新規Eventから`approval_decision_refs`をCanonicalとする。
 
 FIX-016では旧`HypothesisPoolEntry.max_production_stage`を`authorized_production_stage_ceiling`へ意味明確化してMigration可能にする。一方、旧`RiskState.allowed_trade_stage`はRetired Fieldとして保持し、Knowledge側Ceilingへ推測変換しない。
+
+FIX-017では旧`KnowledgeLifecycleProfile.last_demo_pass_at / last_live_evidence_at`を削除・再生成せず旧Schemaとして読取可能にする。旧Knowledge Aging `ARCHIVED`も旧State Machine Versionとして保持し、Storage Archiveだけを理由に新Knowledge Health Stateへ機械変換しない。
 
 ---
 
@@ -5049,6 +5189,24 @@ HypothesisPoolEntry.authorized_production_stage_ceiling
 
 STATE-RISK-001
 = Current OS / Portfolio / Market Instance Risk Permission
+```
+
+として責任を分離する。
+
+FIX-017では:
+
+```text
+STATE-KNW-001
+= KnowledgeのCurrent Freshness / Health / Revalidation State
+
+freshness_basis_refs
+= そのCurrent StateのEvidence provenance
+
+StateTransitionEvent
+= Knowledge Aging / Healthの履歴
+
+STATE-STO-001
+= Storage / Archive配置のLifecycle
 ```
 
 として責任を分離する。
@@ -5207,6 +5365,21 @@ RiskState.allowed_trade_stageをauthorized_production_stage_ceilingへ変換し�
 EntryThesis / DefenseDecisionでのCurrent Production / Risk snapshot rule
 ```
 
+FIX-017で決めた次もData / Processing / Knowledge / Storage Contractで固定する。
+
+```text
+knowledge_aging_state enum / required / nullable
+UNKNOWNの入口・復帰条件
+last_validated_at / revalidation_due_at time semantics
+freshness_basis_refs type / cardinality / allowed target types
+Knowledge Aging evaluation policy / revalidation window
+ResearchResult / EvidencePackage / ProductionEvidence等からFreshnessへEvidenceを束ねる規則
+Legacy last_demo_pass_at / last_live_evidence_at read compatibility
+Legacy ARCHIVED state migration
+Knowledge Aging / HealthとStorage Lifecycleを同一statusへ圧縮しない制約
+STALE / DEGRADED時のProduction Promotion再評価Contract
+```
+
 ---
 
 # 18. ObjectとDATABASE_SCHEMAの関係
@@ -5242,6 +5415,8 @@ FIX-013ではCurrent State tableへ書込可能なRole / Serviceを無制限に�
 FIX-015ではApprovalDecisionをCurrent State列やStateTransitionEventの単一`authorized_by`文字列へ圧縮しない。Multi-Approval / Scope / Policy / Evidence provenanceを失わない。
 
 FIX-016ではKnowledge固有の`production_stage / authorized_production_stage_ceiling`とRiskStateを同一`trade_stage` Columnへ圧縮しない。
+
+FIX-017ではKnowledge Aging / Health Current ProjectionとEvidence履歴・Storage Lifecycleを同一Table列の万能`status / last_evidence_at`へ圧縮しない。
 
 DB Schemaは後からStorage効率・Query・Migrationを考えて決める。
 
@@ -5344,6 +5519,15 @@ AND Allowed Exposure
 
 を別Gateとして評価する。
 
+FIX-017以降、次のようなEvidence履歴の二重正本を新規採用しない。
+
+```python
+knowledge.last_demo_pass_at = latest_demo_result.finished_at
+knowledge.last_live_evidence_at = latest_live_evidence.created_at
+```
+
+Current Knowledge HealthはEvidence / Resultを`freshness_basis_refs`で参照し、Evidence履歴そのものは元Objectを正本とする。
+
 ---
 
 # 20. Storage Lifecycle区分
@@ -5393,13 +5577,15 @@ FIX-015以前の`authorized_by_role / authorization_ref`を持つStateTransition
 
 FIX-016以前の`HypothesisPoolEntry.max_production_stage / RiskState.allowed_trade_stage`を持つRecordも旧Schema Versionとして読取可能性を維持し、Risk側旧FieldをKnowledge側Ceilingへ推測変換しない。
 
+FIX-017以前のKnowledge Aging `ARCHIVED`や`last_demo_pass_at / last_live_evidence_at`を持つRecordも旧Schema / State Machine Versionとして保持する。新規Storage ArchiveはStorage Lifecycleで表し、Storage Tier変更を理由にKnowledge Healthを無言で変更しない。
+
 具体的保存期間は `STORAGE.md` / Long-Term Governanceで決める。
 
 ---
 
 # 21. Knowledge Aging共通原則
 
-FIX-012以降、Knowledge Aging / Healthの正本候補は:
+FIX-017以降、Knowledge Aging / Healthの正本候補は:
 
 ```text
 KnowledgeLifecycleProfile.knowledge_aging_state
@@ -5413,12 +5599,27 @@ CURRENT
 AGING
 STALE
 DEGRADED
-ARCHIVED
+UNKNOWN
 ```
 
 古い = 無効ではない。
 
+```text
+STALE
+≠ RETIRED
+```
+
 `DEGRADED` = 研究上のApproval自動取消、でもない。
+
+```text
+DEGRADED
+≠ RETIRED
+≠ Production PAUSED
+```
+
+Knowledge Healthを判断できるEvidenceが不足する場合は、無理に`CURRENT / STALE / DEGRADED`へ分類せず`UNKNOWN`を許容する。
+
+`ARCHIVED`はFIX-017以降、Knowledge Aging / Healthの新規Canonical Stateではない。長期保存・Storage TierはStorage Lifecycle / Retention Governanceの責任とする。
 
 ただし:
 
@@ -5429,6 +5630,8 @@ ARCHIVED
 Production Thesis BuilderはKnowledge Aging / Healthを無視してApplicableHypothesisSetへ採用しない。
 
 Production利用停止が必要なら、Knowledge Aging / Healthを`SUSPENDED`へ変えるのではなく、別のProduction Promotion Transitionとして`PAUSED`等を適用する。
+
+KnowledgeLifecycleProfile自体にDemo / Live Evidence履歴を複製せず、`freshness_basis_refs`から元EvidenceへTraceする。
 
 ---
 
@@ -5481,6 +5684,16 @@ Production Permission関連Objectでは追加で:
 □ Authorized Production Stage Ceiling
 □ Risk Stateとの責任境界
 □ Legacy field migration
+```
+
+Knowledge Lifecycle関連Objectでは追加で:
+
+```text
+□ Current freshness / healthだけを表している
+□ freshness_basis_refsからEvidenceへTrace可能
+□ Evidence履歴を二重正本化していない
+□ Production / Risk / Storage Stateを混在させていない
+□ UNKNOWN / Legacy ARCHIVED Migrationを説明できる
 ```
 
 を確認する。
@@ -5649,6 +5862,9 @@ ResearchPlanLifecycleObject
 ResearchPlanLockObject
 EdgeHealthObject
 EffectiveProductionStageObject
+DemoFreshnessObject
+LiveFreshnessObject
+KnowledgeArchiveObject
 ```
 
 理由:
@@ -5662,6 +5878,7 @@ EffectiveProductionStageObject
 - ResearchPlan Lifecycle / Lock = FIX-011では新Objectを作らず、ResearchPlanの独立State Machineとして表現する
 - `EdgeHealthObject` = FIX-012では新設せず、Edge maturityはEdge Lifecycle、現在のKnowledge healthはKnowledgeLifecycleProfileで表す
 - `EffectiveProductionStageObject` = FIX-016ではProduction Permission / Risk PermissionをDerivedな一つのStageへ統合せず、実行時Gateで別々に評価する
+- `DemoFreshnessObject / LiveFreshnessObject / KnowledgeArchiveObject` = FIX-017では新設せず、Evidence履歴は既存Evidence Object、ArchiveはStorage Lifecycleで表現する
 
 FIX-015により`ApprovalDecision`はこの「意図的にObject化しない」一覧から除外し、`OBJ-GOV-001`として正式化した。
 
@@ -5699,13 +5916,14 @@ COUNTERFACTUAL
 10. **FIX-014でSourceMetadata Retrieval Result・Source Lifecycle・Data Qualityを分離。retrieval_status型、Logical/Provider Source identity、Failure aggregation、Fallback、Recovery、Legacy status MigrationはData / Source / Monitoring Contractで固定する**
 11. **FIX-015でApprovalDecision Objectを正式化済み。Field型、Required/Nullable、Decision Enum、Policy/Authority refs、Required Approval Set、Scope intersection、Expiry、Single-use、Supersession、ApprovalDecision↔StateTransitionEvent CardinalityはData / Processing / Authority / DB Contractで固定する**
 12. **FIX-016でCurrent Production Stage・Authorized Production Stage Ceiling・Current Risk Permissionを分離。Stage型、Ceiling validation、PAUSED non-ordinal、Risk Gate arbitration、Legacy `max_production_stage / allowed_trade_stage` MigrationはData / Processing / Production / Risk Contractで固定する**
-13. Soft / Hard ContradictionのProduction Gate → Production Contract
-14. Risk Stateの閾値 → Risk Design / Research
-15. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
-16. Object間Cardinality → `DATA_CONTRACT.md` / `DATABASE_SCHEMA.md`
-17. Retention期間 → Storage Governance
-18. Encryption / Secret分類 → Security Design
-19. Schema Migration実装 → Version / Migration Design
+13. **FIX-017でKnowledgeLifecycleProfileをCurrent Freshness / Health / Revalidation Projectionへ限定。`freshness_basis_refs`、UNKNOWN、Legacy `last_demo_pass_at / last_live_evidence_at / ARCHIVED`、Storage Lifecycle分離はData / Knowledge / Storage Contractで固定する**
+14. Soft / Hard ContradictionのProduction Gate → Production Contract
+15. Risk Stateの閾値 → Risk Design / Research
+16. Object Fieldの型 / Required / Nullable → `DATA_CONTRACT.md`
+17. Object間Cardinality → `DATA_CONTRACT.md` / `DATABASE_SCHEMA.md`
+18. Retention期間 → Storage Governance
+19. Encryption / Secret分類 → Security Design
+20. Schema Migration実装 → Version / Migration Design
 
 ---
 
@@ -5822,6 +6040,34 @@ RiskState.state / allowed_exposure
 Current Production Stage
 ≠ Authorized Production Stage Ceiling
 ≠ Current Risk Permission
+```
+
+FIX-017ではさらに:
+
+> **KnowledgeLifecycleProfileは「現在このKnowledgeをどの程度Fresh / Healthy / Revalidation済みとみなすか」に限定し、Evidence履歴・Production Permission・Risk Permission・Storage Archiveを所有しない。**
+
+```text
+KnowledgeLifecycleProfile
+= Current Freshness / Health Projection
+
+freshness_basis_refs
+= Why / Evidence Trace
+
+StateTransitionEvent
+= Transition History
+
+Storage Lifecycle
+= Archive / Tier Placement
+```
+
+正式原則:
+
+```text
+Knowledge Current Freshness / Health
+≠ Evidence History
+≠ Production Permission
+≠ Current Risk Permission
+≠ Storage / Archive State
 ```
 
 何十年以上運用するため、Python・DB・Exchange・AI Provider・Data Providerが変わっても、Objectの意味・Version・Provenance・Research履歴・Trade判断履歴・Approval履歴・State Transition履歴・Authority provenanceを失わない設計を優先する。
