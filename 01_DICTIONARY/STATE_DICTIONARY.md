@@ -457,6 +457,22 @@ Multi-Approval
 = 複数ApprovalDecisionで表現
 ```
 
+## RULE-STATE-016: Knowledge HealthとStorage Lifecycleを分離する
+
+FIX-017以降、Knowledge Aging / HealthはKnowledgeのCurrent freshness / health / revalidation状態だけを表す。
+
+```text
+Knowledge Aging / Health
+≠ Evidence History
+≠ Production Promotion
+≠ Risk State
+≠ Storage Lifecycle
+```
+
+`ARCHIVED`は新規Knowledge Aging / Health Stateとして使用せず、Storage / Archive配置は`STATE-STO-001`等で表す。
+
+Evidence不足は無理にSTALE / DEGRADEDへ変換せず、`UNKNOWN`を許容する。
+
 ---
 
 # 6. State分類
@@ -505,6 +521,13 @@ Research maturity
 ≠ Current OS risk permission
 ```
 
+FIX-017ではさらに、Storage Lifecycleはこの4軸のいずれにも含めない。
+
+```text
+Knowledge freshness / health
+≠ Storage / archive placement
+```
+
 例:
 
 ```text
@@ -512,9 +535,10 @@ Edge Lifecycle = APPROVED
 Knowledge Aging / Health = DEGRADED
 Production Promotion = PAUSED
 Risk State = NORMAL
+Storage Lifecycle = ARCHIVED
 ```
 
-は成立する。
+のように各軸は独立して表現可能である。
 
 ---
 
@@ -990,7 +1014,7 @@ REOPEN CRITERIA
 - `KnowledgeLifecycleProfile`
 - Hypothesis / Edge / FeatureKnowledge / FormulaKnowledge / Constraint等
 
-FIX-012正式候補State:
+FIX-017正式候補State:
 
 ```text
 FRESH
@@ -998,46 +1022,93 @@ CURRENT
 AGING
 STALE
 DEGRADED
-ARCHIVED
+UNKNOWN
 ```
+
+Knowledge Aging / Healthは、そのKnowledgeを現在どの程度Fresh / Revalidated / Healthyとみなせるかだけを表すCurrent State Machine。
 
 ## FRESH
 
-最近生成・検証された。
+最近正式Validationされ、現在条件でもFreshness根拠が明確な状態。
 
 ## CURRENT
 
-現在の利用条件で十分再検証されている。
+現在の利用条件で十分再検証され、現在利用可能な鮮度・健全性を満たしている状態。
 
 ## AGING
 
-再検証期限が近い、またはEvidence鮮度低下。
+まだ無効ではないが、再検証期限が近い、またはEvidence鮮度が低下している状態。
 
 ## STALE
 
-長期間再検証されていない。
+再検証期限超過等により、現在の有効性を当然視できない状態。
 
-`FALSE`とは限らないが、ProductionでのTrustを制限できる。
+```text
+STALE
+≠ FALSE
+≠ RETIRED
+```
+
+ProductionでTrustを制限・再評価できるが、研究成熟度を自動取消ししない。
 
 ## DEGRADED
 
-最近のDemo / Live / OOS等で性能劣化が観測された。
+新Evidence / Contradiction / Demo-Live Divergence / OOS悪化等により、Knowledgeの現在信頼性が実質低下している状態。
 
-## ARCHIVED
+```text
+DEGRADED
+≠ RETIRED
+≠ Production PAUSED
+```
 
-現役利用対象外だが歴史・研究資産として保存。
+Production停止が必要なら別のProduction Promotion Transitionで判断する。
 
-FIX-012 Migration:
+## UNKNOWN
+
+Freshness / Healthを判定するEvidence自体が不足している、またはLegacy Migration等で現在評価を確定できない状態。
+
+UNKNOWNをCURRENTへ都合よく読み替えない。
+
+## FIX-012 / FIX-017 Migration
 
 ```text
 SUSPENDED
 → Knowledge Aging / Healthから除外。
   Knowledge health低下はDEGRADED、Production利用停止はProduction Promotion = PAUSEDで表す。
+
+ARCHIVED
+→ FIX-017以降、新規Knowledge Aging / Health Stateから除外。
+  Storage / Archive配置はSTATE-STO-001等のStorage Lifecycleで表す。
 ```
+
+過去のKnowledge Aging `ARCHIVED` StateTransitionEventを削除・書き換えず、旧State Machine Versionとして解釈する。
+
+旧`ARCHIVED`を新Knowledge Health StateへMigrationする場合、Storage Tierだけを見て`STALE / DEGRADED / UNKNOWN`等へ機械変換しない。Current Evidenceを再評価するMigration Contractを要求する。
+
+## Evidence / History Boundary
+
+```text
+KnowledgeLifecycleProfile
+= Current Projection
+
+StateTransitionEvent
+= Knowledge Aging / Health Transition History
+
+ResearchResult / EvidencePackage / ProductionEvidence / Contradiction等
+= Freshness / Health判断のEvidence
+
+STATE-STO-001
+= Storage / Archive配置
+```
+
+`last_demo_pass_at / last_live_evidence_at`のようなEvidence history helperをKnowledge Aging Stateの正本にしない。
 
 重要:
 
-Knowledge `DEGRADED`であっても、Hypothesis / Edgeの研究上のAPPROVED履歴を自動的に消さない。
+- Knowledge `DEGRADED`でもHypothesis / Edgeの研究上のAPPROVED履歴を自動的に消さない
+- Knowledge `STALE`でも自動RETIREDしない
+- `UNKNOWN`を安全側・健康側へ自動補完しない
+- Storage `ARCHIVED`をKnowledge healthとして新規利用しない
 
 ---
 
@@ -1829,6 +1900,7 @@ retrieval_status = SUCCESS
 対象:
 
 - Raw / Research / Operational Data Retention
+- Knowledge ObjectのStorage / Archive placement
 
 候補State:
 
@@ -1856,6 +1928,22 @@ DELETED
 ## ARCHIVED
 
 長期保存対象。
+
+FIX-017以降、これはStorage / Retention上のStateであり、Knowledge freshness / healthを意味しない。
+
+次は成立する。
+
+```text
+Knowledge Aging / Health = CURRENT
+Storage Lifecycle = ARCHIVED
+```
+
+```text
+Knowledge Aging / Health = STALE
+Storage Lifecycle = HOT
+```
+
+Storage配置とKnowledge Healthを一つのStateへ統合しない。
 
 ## DELETION_PENDING
 
@@ -2052,6 +2140,8 @@ Source Lifecycle行のSource Adapter / Collectorは、per-retrieval結果・Diag
 
 FIX-015では、`Knowledge Promotion + Risk Governance`のように複数Approve Authorityを要求する場合、それぞれが独立したApprovalDecisionを生成する。
 
+FIX-017ではKnowledge Aging / Health AuthorityとStorage Lifecycle Authorityを分離し、Knowledge Lifecycle ControllerがStorage Tierを直接変更する責任を持つものとして扱わない。
+
 ## 13.4 Shared State Transition Engine
 
 共通`State Transition Engine`は実装可能だが、Authorityではない。
@@ -2129,6 +2219,8 @@ Restrictive Authorityが単独でRisk / Permissionを元へ戻してはならな
 FIX-014ではSource Recovery時に一回のRetrieval SUCCESSだけで復帰確認を完了しない。
 
 FIX-015ではRecovery / Permission Expansionで要求するApprovalDecision集合をRestrictive Fast Pathと同等以上に厳しくする。
+
+Knowledge `STALE / DEGRADED / UNKNOWN → CURRENT / FRESH`等のHealth改善側Transitionでも、必要なFreshness Evidence / Revalidationを確認し、単なるStorage復元や単発EvidenceだけでHealthy側へ戻さない。
 
 ## 13.7 Human / Telegram
 
@@ -2304,6 +2396,8 @@ FIX-014ではSource Lifecycleも同様に、明示Hard Triggerによる制限側
 
 FIX-015ではFast Path / Strict PathのどちらでもApprovalDecision provenanceを失わない。
 
+FIX-017ではKnowledge Health改善側もFreshness Evidence / Revalidation確認を要求し、Storage状態や一件の新Evidenceだけを理由にCURRENT / FRESHへ戻さない。
+
 ---
 
 # 15. Hard TriggerとSoft Trigger
@@ -2453,6 +2547,8 @@ FIX-014ではSourceMetadata retrieval historyとSource Lifecycle StateTransition
 
 FIX-015ではStateTransitionEventの`approval_decision_refs`から、Approve Authority / Policy / Evidence / Scopeまで逆引き可能にする。
 
+FIX-017ではKnowledgeLifecycleProfileの`freshness_basis_refs`とKnowledge Aging / Health StateTransitionEventから、Current Health判断とその変更理由を元Evidenceまで逆引き可能にする。
+
 将来のDependency / Impact Contractで正式化する。
 
 ---
@@ -2475,6 +2571,8 @@ Live = insufficient
 StateはSummaryであり、元のEvidencePackage / AssessmentProfileを参照可能にする。
 
 FIX-012では、最近のDemo / Live劣化を研究成熟度へ直接混ぜず、Knowledge Aging / HealthのTransitionとして表現できる。
+
+FIX-017ではDemo / Liveの最新時刻をKnowledgeLifecycleProfileの第二正本へ複製せず、`freshness_basis_refs` / `trigger_refs`からResearchResult / EvidencePackage / ProductionEvidence等へ遡る。
 
 StateTransitionEventの`trigger_refs`から、State変更を起こしたEvidencePackage / ResearchResult / ProductionEvidence等へ遡れることを目標とする。
 
@@ -2517,6 +2615,8 @@ Provider A ACTIVE → UNAVAILABLE
 
 FIX-015以降はApprovalDecision履歴も、承認が早すぎた・HOLDが頻発した・どのPolicyがREJECTを増やした等のGovernance Research材料にできる。
 
+FIX-017以降はKnowledge Aging / Health Transitionも、どのEvidenceがFreshness低下・回復を引き起こしたかを研究できる。ただしStorage Archive履歴とKnowledge Health履歴を同一にしない。
+
 State履歴そのものを消さず、Knowledgeは履歴を参照する。
 
 ---
@@ -2538,6 +2638,7 @@ State履歴そのものを消さず、Knowledgeは履歴を参照する。
 10. FIX-012の別State軸の責任を侵食していないか？
 11. FIX-014のper-retrieval結果をSource Stateとして誤追加していないか？
 12. FIX-015のApprovalDecisionをApproval Lifecycle Stateとして誤追加していないか？
+13. FIX-017のStorage / Archive状態をKnowledge Health Stateとして誤追加していないか？
 ```
 
 満たさない場合、新Stateを増やさない。
@@ -2562,6 +2663,7 @@ State名・意味・遷移を変更する場合、`DESIGN_CHANGE_RULES.md` に�
 - Emergency Fast Path権限変更
 - Source LifecycleとRetrieval Resultの責任統合
 - ApprovalDecisionのRequired Authority / Scope / Transition Binding意味変更
+- Knowledge Aging / HealthとStorage Lifecycleの責任統合
 
 これらは既存DB / Python Enum / Test / Monitoring / Telegram / Analytics / StateTransitionEvent解釈へ影響するため、Impact Analysisを必須候補とする。
 
@@ -2572,6 +2674,8 @@ FIX-012の旧StateはMigration Mappingを残し、過去履歴を物理削除し
 FIX-014以前の`SourceMetadata.status`を、現在のSource Lifecycle Stateへ無言で変換して過去Recordを上書きしない。
 
 FIX-015以前の`authorization_ref / authorized_by_role`を持つStateTransitionEventを推測で複数ApprovalDecisionへ書き換えず、旧Schema Versionとして読取可能性を維持する。
+
+FIX-017以前のKnowledge Aging `ARCHIVED` Stateも旧State Machine Versionとして読取可能性を維持し、Storage Stateだけを理由に新Knowledge Health Stateへ推測変換しない。
 
 ---
 
@@ -2634,6 +2738,15 @@ if request.approved:
 ```
 
 概念上はRequired ApprovalDecision Setを検証し、Apply Authority / State Transition Engine経由で適用する。
+
+FIX-017以降、次のような責任混在を新規採用しない。
+
+```python
+if storage_state == "ARCHIVED":
+    knowledge_state = "ARCHIVED"
+```
+
+Knowledge Aging / HealthとStorage Lifecycleは別State Machineとして評価する。
 
 ---
 
@@ -2714,6 +2827,8 @@ FIX-014では`SourceMetadata.retrieval_status`とSource Lifecycle Current Projec
 
 FIX-015ではApprovalDecisionをCurrent State列やStateTransitionEventの単一Authorization文字列へ圧縮しない。
 
+FIX-017ではKnowledge Aging / Health Current ProjectionとStorage Lifecycle Current Projectionを一つの`knowledge_status`列へ圧縮せず、Evidence履歴もKnowledgeLifecycleProfileへ複製しない。
+
 正式Table名・Index・Transaction方式は `DATABASE_SCHEMA.md` で確定する。
 
 ---
@@ -2733,16 +2848,26 @@ Production Stage: LIMITED_LIVE
 Position Thesis: WATCH
 ```
 
-FIX-012対象Knowledgeでは必要に応じて:
+FIX-012 / FIX-017対象Knowledgeでは必要に応じて:
 
 ```text
 Hypothesis: APPROVED
-Knowledge: AGING
+Knowledge Health: AGING
 Production: LIMITED_LIVE
 Risk: CAUTION
+Storage: ARCHIVED
 ```
 
 のように軸を分けて表示する。
+
+Knowledge Healthが判定不能なら:
+
+```text
+Knowledge Health: UNKNOWN
+Storage: HOT
+```
+
+も成立する。
 
 FIX-014対象Sourceでは必要に応じて:
 
@@ -2756,7 +2881,7 @@ Data Quality: HEALTHY
 
 のようにLifecycle / Retrieval / Qualityを分けて表示する。
 
-異なるState MachineやRetrieval結果を一つの `SYSTEM_STATUS = BAD` / `source_status = BAD` へ潰さない。
+異なるState MachineやRetrieval結果を一つの `SYSTEM_STATUS = BAD` / `source_status = BAD` / `knowledge_status = ARCHIVED` へ潰さない。
 
 必要時にはCurrent Stateだけでなく、直近`StateTransitionEvent`の変更時刻・Reason Code・ApprovalDecision refs・Apply Authority provenanceを表示可能にする。
 
@@ -2792,6 +2917,8 @@ Knowledge SUSPENDED
 FIX-014以前のSourceMetadata `status`も旧Schemaの意味を保持し、新しいSource Lifecycleへ推測で再解釈して過去Recordを書き換えない。
 
 FIX-015以前のAuthorization provenanceも旧Schemaとして維持し、後から存在しなかったApprovalDecisionを捏造して補完しない。
+
+FIX-017以前のKnowledge Aging `ARCHIVED`も旧State Machine Versionとして履歴を保持する。新VersionではStorage `ARCHIVED`とKnowledge Healthを分離し、過去Stateを無言で意味変更しない。
 
 ---
 
@@ -2846,6 +2973,16 @@ Approvalを要求するState Machineでは追加で:
 □ RestrictionとRecoveryでApproval強度を分けられる
 ```
 
+Knowledge Aging / Healthでは追加で:
+
+```text
+□ Evidence historyをCurrent Stateへ複製していない
+□ UNKNOWNを扱える
+□ Storage Lifecycleと分離している
+□ Legacy ARCHIVEDを旧Versionとして解釈できる
+□ Freshness Evidence / RevalidationからState根拠へTraceできる
+```
+
 を確認する。
 
 ---
@@ -2859,8 +2996,11 @@ Risk Stateの具体的DD閾値
 MICRO_LIVE / LIMITED_LIVEの資金割合
 Research Early Stopの具体的Sample数
 Knowledge Agingの具体的期限
+Knowledge FRESH / CURRENT / AGING / STALEの具体的Freshness window
+Knowledge UNKNOWNの入口・Recovery条件
 Knowledge DEGRADED時のProduction Gate強度
 AGING / STALE時のProduction縮小規則
+Legacy Knowledge ARCHIVEDのMigration判定
 Production Promotion再開条件
 Health Stateの数値閾値
 Position Supervisor Hysteresisの具体時間
@@ -2906,7 +3046,11 @@ RETIRED → REOPENED → VALIDATING
 Knowledge Aging / Health:
 FRESH → CURRENT → AGING → STALE
                     └────→ DEGRADED
-                         → ARCHIVED
+UNKNOWN ↔ re-evaluation / evidence acquisition
+
+Storage Lifecycle:
+HOT → WARM → COLD → ARCHIVED
+                     └→ DELETION_PENDING → DELETED
 
 Research Candidate:
 NEW → SCREENING → QUEUED → RUNNING → COMPLETED
@@ -2964,6 +3108,8 @@ REQUEST
 へ分離する。
 
 Source取得結果はこのState一覧へ混ぜず、`SourceMetadata.retrieval_status`として別管理する。
+
+Knowledge Evidence historyはKnowledge Aging / Health Stateへ複製せず、Evidence Object群を参照する。
 
 ---
 
@@ -3046,6 +3192,30 @@ APPROVE
 
 ApprovalDecisionは特定Target / Version / TransitionへBindingされたImmutable Governance Decisionとし、Multi-Approvalは複数Decision、ApplyはRequired Approval Setの検証後にのみ行う。
 
+FIX-017ではさらに:
+
+```text
+Knowledge Aging / Health
+= Current Freshness / Health / Revalidation State
+
+Evidence History
+= ResearchResult / EvidencePackage / ProductionEvidence等
+
+Storage Lifecycle
+= Archive / Tier Placement
+```
+
+を正式に分離する。
+
+```text
+STALE ≠ RETIRED
+DEGRADED ≠ RETIRED
+DEGRADED ≠ PAUSED
+Knowledge Aging / Health ≠ Storage Lifecycle
+```
+
+Evidence不足は`UNKNOWN`として保持でき、過去`ARCHIVED`は旧State Machine Versionとして再現可能にする。
+
 これにより市場理解OSは、数年後・数十年後でも、
 
 ```text
@@ -3055,6 +3225,8 @@ ApprovalDecisionは特定Target / Version / TransitionへBindingされたImmutab
 「承認されたがApplyされなかったのか？」
 「承認Scope / Expiry / Versionは何だったのか？」
 「実際に誰がState変更をApplyしたのか？」
+「Knowledge Healthは何のEvidenceを根拠にしていたのか？」
+「Storage ArchiveとKnowledge Healthは別々にどう変化したのか？」
 ```
 
 まで再現可能にする。
